@@ -10,11 +10,6 @@
 /hack/bin
 /.artifacts
 
-/e2e/testdata/default_home/go
-/e2e/testdata/default_home/.cache
-
-/pkg/functions/testdata/migrations/*/.gitignore
-
 # JS
 node_modules
 /templates/typescript/cloudevents/build
@@ -25,6 +20,10 @@ __pycache__
 /templates/python/cloudevents/.venv
 /templates/python/http/.venv
 
+# E2E Tests
+/e2e/testdata/default_home/go
+/e2e/testdata/default_home/.cache
+
 # VSCode
 .vscode
 
@@ -33,3 +32,7 @@ __pycache__
 
 # Operating system temporary files
 .DS_Store
+
+# TODO: the need to ignore this is due to a faulty unit test:
+/pkg/functions/testdata/migrations/*/.gitignore
+

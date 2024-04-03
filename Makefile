@@ -205,7 +205,10 @@ templates/certs/ca-certificates.crt:
 test-integration: ## Run integration tests using an available cluster.
 	go test -tags integration -timeout 30m --coverprofile=coverage.txt ./... -v
 
-.PHONY: func-instrumented
+
+test-e2e-quick: func-instrumented ## Run quick end-to-end tests using an available cluster.
+	# go test ./e2e -tags="e2e"
+	go test ./e2e
 
 func-instrumented: ## Func binary that is instrumented for e2e tests
 	env CGO_ENABLED=1 go build -cover -o func ./cmd/$(BIN)
