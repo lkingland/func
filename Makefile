@@ -206,9 +206,7 @@ test-integration: ## Run integration tests using an available cluster.
 	go test -tags integration -timeout 30m --coverprofile=coverage.txt ./... -v
 
 
-test-e2e-quick: func-instrumented ## Run quick end-to-end tests using an available cluster.
-	# go test ./e2e -tags="e2e"
-	go test ./e2e
+.PHONY: func-instrumented
 
 func-instrumented: ## Func binary that is instrumented for e2e tests
 	env CGO_ENABLED=1 go build -cover -o func ./cmd/$(BIN)
@@ -221,6 +219,9 @@ test-e2e-runtime: func-instrumented ## Run end-to-end lifecycle tests using an a
 
 test-e2e-on-cluster: func-instrumented ## Run end-to-end on-cluster build tests using an available cluster.
 	./test/e2e_oncluster_tests.sh
+
+test-e2e-host: func-instrumented ## Run end-to-end tests for the host builder
+	go test ./e2e -tags="e2e"
 
 ######################
 ##@ Release Artifacts
