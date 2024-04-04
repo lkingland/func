@@ -737,6 +737,17 @@ func newConfigFile(job buildJob, p v1.Platform, base v1.Image, imageLayers []ima
 // the container.  This consists of func-provided build metadata envs as well
 // as any environment variables provided on the function itself.
 func newConfigEnvs(job buildJob) []string {
+	// FIXME:  the FUNC_GIT environment variable should be
+	// pulled out into "cmd", and this setting plumbed through
+	// either as an argument or context variable accessed here, rather
+	// than accessing the environment variables directly from within a
+	// library.  This is temporary for purposes of the E2E update and
+	// will be completed in a separate issue.  Issue #TBD
+	gitbin := os.Getenv("FUNC_GIT") // Use if provided
+	if gitbin == "" {
+		gitbin = "git" // default to looking on PATH
+	}
+
 	envs := []string{}
 
 	// FUNC_CREATED
@@ -749,14 +760,14 @@ func newConfigEnvs(job buildJob) []string {
 	// environment FUNC_VERSION will be populated.  Otherwise it will exist
 	// (to indicate this logic was executed) but have an empty value.
 	if job.verbose {
-		fmt.Fprintf(os.Stderr, "cd %v && export FUNC_VERSION=$(git describe --tags)\n", job.function.Root)
+		fmt.Fprintf(os.Stderr, "cd %v && export FUNC_VERSION=$(%v describe --tags)\n", job.function.Root, gitbin)
 	}
-	cmd := exec.CommandContext(job.ctx, "git", "describe", "--tags")
+	cmd := exec.CommandContext(job.ctx, gitbin, "describe", "--tags")
 	cmd.Dir = job.function.Root
 	output, err := cmd.Output()
 	if err != nil {
 		if job.verbose {
-			fmt.Fprintf(os.Stderr, "unable to determine function version. %v\n", err)
+			fmt.Fprintf(os.Stderr, "WARN: unable to determine function version. %v\n", err)
 		}
 		envs = append(envs, "FUNC_VERSION=")
 	} else {
