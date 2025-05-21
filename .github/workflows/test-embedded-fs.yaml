@@ -1,10 +1,10 @@
-name: Func Embedded FS Test
+name: Func Test Embedded FS
 
 on: [pull_request]
 
 jobs:
   test:
-    name: Func Embedded FS Test
+    name: Func Test Embedded FS
     strategy:
       matrix:
         os: ["ubuntu-latest"]

@@ -1,52 +1,26 @@
-name: CI
+name: Publish
 
 on:
   push:
     branches:
       - "main"
+
 jobs:
   check:
     runs-on: "ubuntu-latest"
     steps:
       - uses: actions/checkout@v4
       - uses: knative/actions/setup-go@main
-      - name: Lint
-        run: make check && make check-templates
+      - name: Lint Core
+        run: make check
+      - name: Lint Templates
+        run: make templates-check
       - name: Check that 'func.yaml schema' is up-to-date
         run: make schema-check
       - name: Check embedded templates content
         run: go test -run "^\QTestFileSystems\E$/^\Qembedded\E$" ./pkg/filesystem
 
-  test-unit:
-    strategy:
-      matrix:
-        java: [ 21 ]
-        os: [ "ubuntu-latest", "windows-latest", "macos-latest" ]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: knative/actions/setup-go@main
-      - uses: actions/setup-java@v4
-        with:
-          java-version: ${{ matrix.java }}
-          distribution: 'temurin'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Unit Test
-        run:  make test
-      - name: Template Unit Tests
-        run:  make test-templates
-      - uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage.txt
-          flags: unit-tests
-          fail_ci_if_error: true
-          verbose: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  test-integration:
+  test:
     runs-on: "ubuntu-latest"
     steps:
       - name: Set Environment Variables
@@ -80,113 +54,18 @@ jobs:
         run: ./hack/registry.sh
       - name: Setup testing images
         run: ./hack/setup-testing-images.sh
-      - name: Integration Tests
-        run: make test-integration
-      - uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage.txt
-          flags: integration-tests
-          fail_ci_if_error: true
-          verbose: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  e2e-test:
-    strategy:
-      matrix:
-        os: ["ubuntu-latest"]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Set Environment Variables
-        run: |
-          echo "KUBECONFIG=${{ github.workspace }}/hack/bin/kubeconfig.yaml" >> "$GITHUB_ENV"
-          echo "PATH=${{ github.workspace }}/hack/bin:$PATH" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-      - uses: knative/actions/setup-go@main
-      - name: Install Binaries
-        run: ./hack/install-binaries.sh
-      - name: Allocate Cluster
-        run: |
-          attempt=0
-          max_attempts=5
-          until [ $attempt -ge $max_attempts ]
-          do
-            attempt=$((attempt+1))
-            echo "------------------ Attempt $attempt ------------------"
-            ./hack/allocate.sh && break
-            echo "------------------ failed, retrying... ------------------"
-            if [ $attempt -ge $max_attempts ]; then
-              echo "------------------ max # of retries reached, exiting ------------------"
-              exit 1
-            fi
-            ./hack/delete.sh
-            echo "------------------ sleep for 5 minutes ------------------"
-            sleep 300
-          done
-          echo "------------------ finished! attempt $attempt ------------------"
-      - name: Local Registry
-        run: ./hack/registry.sh
-      - name: E2E Test
+      - name: Test
         run: make test-e2e
       - uses: codecov/codecov-action@v5
         with:
           files: ./coverage.txt
-          flags: e2e-tests
-          fail_ci_if_error: true
-          verbose: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  e2e-on-cluster-test:
-    strategy:
-      matrix:
-        os: ["ubuntu-latest"]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Set Environment Variables
-        run: |
-          echo "KUBECONFIG=${{ github.workspace }}/hack/bin/kubeconfig.yaml" >> "$GITHUB_ENV"
-          echo "PATH=${{ github.workspace }}/hack/bin:$PATH" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-      - uses: knative/actions/setup-go@main
-      - uses: imjasonh/setup-ko@v0.6
-      - name: Install Binaries
-        run: ./hack/install-binaries.sh
-      - name: Allocate Cluster
-        run: |
-          attempt=0
-          max_attempts=5
-          until [ $attempt -ge $max_attempts ]
-          do
-            attempt=$((attempt+1))
-            echo "------------------ Attempt $attempt ------------------"
-            ./hack/allocate.sh && break
-            echo "------------------ failed, retrying... ------------------"
-            if [ $attempt -ge $max_attempts ]; then
-              echo "------------------ max # of retries reached, exiting ------------------"
-              exit 1
-            fi
-            ./hack/delete.sh
-            echo "------------------ sleep for 5 minutes ------------------"
-            sleep 300
-          done
-          echo "------------------ finished! attempt $attempt ------------------"
-      - name: Setup testing images
-        run: ./hack/setup-testing-images.sh
-      - name: Deploy Test Git Server
-        run: ./hack/install-git-server.sh
-      - name: E2E On Cluster Test
-        env:
-          E2E_RUNTIMES: ""
-        run: make test-e2e-on-cluster
-      - uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage.txt
-          flags: e2e-tests
+          flags: e2e publish
           fail_ci_if_error: true
           verbose: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
   build:
-    needs: [check, test-unit, test-integration, e2e-test, e2e-on-cluster-test]
+    needs: [check, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

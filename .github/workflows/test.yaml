@@ -1,10 +1,9 @@
-name: Func Integration Test
+name: Func Test
 
 on: [pull_request]
 
 jobs:
   test:
-    name: Integration Test
     strategy:
       matrix:
         os: ["ubuntu-latest"]
@@ -26,7 +25,6 @@ jobs:
           echo "PAC_CONTROLLER_HOSTNAME=pac-ctr.127.0.0.1.sslip.io" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: knative/actions/setup-go@main
-      - uses: imjasonh/setup-ko@v0.6
       - name: Install Binaries
         run: ./hack/install-binaries.sh
       - name: Allocate Cluster
@@ -48,19 +46,32 @@ jobs:
             sleep 300
           done
           echo "------------------ finished! attempt $attempt ------------------"
-      - name: Local Registry
+      - name: Configure Registry
         run: ./hack/registry.sh
-      - name: Setup testing images
+      # TODO: where are the testing images being used?
+      # TODO: Confirm what this is needed for, and evaluate if it should
+      # be rolled into allocate.sh:
+      - name: Setup Testing Images
         run: ./hack/setup-testing-images.sh
+      # TODO: Evaluate if we can roll this into allocate.sh with an env var
+      # or flag toggle:
       - name: Install Gitlab
         run: ./hack/install-gitlab.sh
       - name: Patch Hosts
         run: ./hack/patch-hosts.sh
-      - name: Integration Test
+      - name: Run All Tests
+        # TODO: Track down all the below env vars and confirm they are
+        # either necessary, or can be removed in favor of defaults.
+        # If necessary for configuraiton, ensure that the defaults are set
+        # appropriately such that this config is no longer necessary _here_
+        # NOTE: Retaining for potential use in forthcoming weekly "matrix"
+        # tests as a template for specifying builder matrix via interpolation
         env:
+          # TODO: port these to FUNC_E2E config params when the Git
+          # tests are incorporated into the e2e test suite
           FUNC_REPO_REF: ${{ github.event.pull_request.head.repo.full_name }}
           FUNC_REPO_BRANCH_REF: ${{ github.head_ref }}
-        run: make test-integration
+        run: make test-e2e
       - name: Dump Cluster Logs
         if: always()
         run: |
@@ -71,14 +82,19 @@ jobs:
           echo "::group::cluster containers logs"  >> cluster_log.txt
           stern '.*' --all-namespaces --no-follow  >> cluster_log.txt 2>&1
           echo "::endgroup::"  >> cluster_log.txt
-      - name: "Archive log results"
+      - name: Archive Cluster Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cluster-logs
           path: ./cluster_log.txt
           retention-days: 7
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v4
         with:
           files: ./coverage.txt
-          flags: integration-tests
+          flags: e2e
+          fail_ci_if_error: true
+          verbose: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+

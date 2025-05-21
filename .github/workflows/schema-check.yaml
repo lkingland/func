@@ -1,10 +1,10 @@
-name: Func Check Schema
+name: Func Schema Check
 
 on: [pull_request]
 
 jobs:
   check:
-    name: Check Schema
+    name: Schema Check
     strategy:
       matrix:
         os: ["ubuntu-latest"]

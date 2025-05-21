@@ -132,47 +132,47 @@ presubmit-unit-tests: ## Run prow presubmit unit tests locally
 #############
 
 # TODO: add linters for other templates
-.PHONY: check-templates
-check-templates: check-go check-rust ## Run template source code checks
+.PHONY: templates-check
+templates-check: templates-check-go templates-check-rust ## Run template source code checks
 
-.PHONY: check-go
-check-go: ## Check Go templates' source
+.PHONY: templates-check-go
+templates-check-go: ## Check Go templates' source
 	cd templates/go/scaffolding/instanced-http && go vet ./... &&  $(BIN_GOLANGCI_LINT) run
 	cd templates/go/scaffolding/instanced-cloudevents && go vet && $(BIN_GOLANGCI_LINT) run
 	cd templates/go/scaffolding/static-http && go vet ./... && $(BIN_GOLANGCI_LINT) run
 	cd templates/go/scaffolding/static-cloudevents && go vet ./... && $(BIN_GOLANGCI_LINT) run
 
-.PHONY: check-rust
-check-rust: ## Check Rust templates' source
+.PHONY: templates-check-rust
+templates-check-rust: ## Check Rust templates' source
 	cd templates/rust/cloudevents && cargo clippy && cargo clean
 	cd templates/rust/http && cargo clippy && cargo clean
 
-test-templates: test-go test-node test-python test-quarkus test-springboot test-rust test-typescript ## Run all template tests
+templates-test: templates-test-go templates-test-node templates-test-python templates-test-quarkus templates-test-springboot templates-test-rust templates-test-typescript ## Run all template tests
 
-test-go: ## Test Go templates
+templates-test-go: ## Test Go templates
 	cd templates/go/cloudevents && go mod tidy && go test
 	cd templates/go/http && go mod tidy && go test
 
-test-node: ## Test Node templates
+templates-test-node: ## Test Node templates
 	cd templates/node/cloudevents && npm ci && npm test && rm -rf node_modules
 	cd templates/node/http && npm ci && npm test && rm -rf node_modules
 
-test-python: ## Test Python templates and Scaffolding
+templates-test-python: ## Test Python templates and Scaffolding
 	test/test_python.sh
 
-test-quarkus: ## Test Quarkus templates
+templates-test-quarkus: ## Test Quarkus templates
 	cd templates/quarkus/cloudevents && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 	cd templates/quarkus/http && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 
-test-springboot: ## Test Spring Boot templates
+templates-test-springboot: ## Test Spring Boot templates
 	cd templates/springboot/cloudevents && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 	cd templates/springboot/http && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 
-test-rust: ## Test Rust templates
+templats-test-rust: ## Test Rust templates
 	cd templates/rust/cloudevents && cargo -q test && cargo clean
 	cd templates/rust/http && cargo -q test && cargo clean
 
-test-typescript: ## Test Typescript templates
+templates-test-typescript: ## Test Typescript templates
 	cd templates/typescript/cloudevents && npm ci && npm test && rm -rf node_modules build
 	cd templates/typescript/http && npm ci && npm test && rm -rf node_modules build
 
@@ -203,27 +203,16 @@ templates/certs/ca-certificates.crt:
 ###################
 
 .PHONY: test-integration
-test-integration: ## Run integration tests using an available cluster.
-	go test -tags integration -timeout 30m --coverprofile=coverage.txt ./... -v
+test-integration: ## Run integration tests
+	go test -tags integration -race -cover-timeout 30m --coverprofile=coverage.txt ./... -v
 
 .PHONY: test-e2e
-test-e2e: func-instrumented ## Run tests including E2Es which require a cluster
-	go test ./e2e -tags e2e -timeout 30m --coverprofile=coverage.txt
+test-e2e: func-instrumented-bin ## Run E2E tests
+	go test -tags integration e2e -race -cover -timeout 30m --coverprofile=coverage.txt ./... -v
 
-.PHONY: func-instrumented
-func-instrumented: ## Func binary that is instrumented for e2e tests
+.PHONY: func-instrumented-bin
+func-instrumented-bin: # Binary instrumented with coverage reporting for E2E tests
 	env CGO_ENABLED=1 go build -cover -o func ./cmd/$(BIN)
-
-# DEPRECATED:
-#
-# test-e2e: func-instrumented ## Run end-to-end tests using an available cluster.
-# 	./test/e2e_extended_tests.sh
-#
-# test-e2e-runtime: func-instrumented ## Run end-to-end lifecycle tests using an available cluster for a single runtime.
-# 	./test/e2e_lifecycle_tests.sh $(runtime)
-#
-# test-e2e-on-cluster: func-instrumented ## Run end-to-end on-cluster build tests using an available cluster.
-# 	./test/e2e_oncluster_tests.sh
 
 ######################
 ##@ Release Artifacts
