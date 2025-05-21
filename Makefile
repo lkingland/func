@@ -131,6 +131,10 @@ presubmit-unit-tests: ## Run prow presubmit unit tests locally
 ##@ Templates
 #############
 
+.PHONY: check-embedded-fs
+check-embedded-fs: ## Check the embedded templates FS
+	go test -run "^\QTestFileSystems\E$$/^\Qembedded\E$$" ./pkg/filesystem
+
 # TODO: add linters for other templates
 .PHONY: templates-check
 templates-check: templates-check-go templates-check-rust ## Run template source code checks
@@ -206,8 +210,8 @@ templates/certs/ca-certificates.crt:
 test-integration: ## Run integration tests
 	go test -tags integration -race -cover-timeout 30m --coverprofile=coverage.txt ./... -v
 
-.PHONY: test-e2e
-test-e2e: func-instrumented-bin ## Run E2E tests
+.PHONY: test-all
+test-all: func-instrumented-bin ## Run all tests (unit, integraiton, e2e)
 	go test -tags integration e2e -race -cover -timeout 30m --coverprofile=coverage.txt ./... -v
 
 .PHONY: func-instrumented-bin
