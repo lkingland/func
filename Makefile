@@ -123,6 +123,7 @@ docs:
 ##@ Prow Integration
 #############
 
+.PHONY: presubmit-unit-tests
 presubmit-unit-tests: ## Run prow presubmit unit tests locally
 	docker run --platform linux/amd64 -it --rm -v$(MAKEFILE_DIR):/src/ us-docker.pkg.dev/knative-tests/images/prow-tests:v20230616-086ddd644 sh -c 'cd /src && runner.sh ./test/presubmit-tests.sh --unit-tests'
 
@@ -151,31 +152,39 @@ templates-check-rust: ## Check Rust templates' source
 	cd templates/rust/cloudevents && cargo clippy && cargo clean
 	cd templates/rust/http && cargo clippy && cargo clean
 
+.PHONY: templates-test
 templates-test: templates-test-go templates-test-node templates-test-python templates-test-quarkus templates-test-springboot templates-test-rust templates-test-typescript ## Run all template tests
 
+.PHONY: templates-test-go
 templates-test-go: ## Test Go templates
 	cd templates/go/cloudevents && go mod tidy && go test
 	cd templates/go/http && go mod tidy && go test
 
+.PHONY: templates-test-node
 templates-test-node: ## Test Node templates
 	cd templates/node/cloudevents && npm ci && npm test && rm -rf node_modules
 	cd templates/node/http && npm ci && npm test && rm -rf node_modules
 
+.PHONY: templates-test-python
 templates-test-python: ## Test Python templates and Scaffolding
 	test/test_python.sh
 
+.PHONY: templates-test-quarkus
 templates-test-quarkus: ## Test Quarkus templates
 	cd templates/quarkus/cloudevents && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 	cd templates/quarkus/http && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 
+.PHONY: templates-test-springboot
 templates-test-springboot: ## Test Spring Boot templates
 	cd templates/springboot/cloudevents && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 	cd templates/springboot/http && ./mvnw -q test && ./mvnw clean && rm .mvn/wrapper/maven-wrapper.jar
 
+.PHONY: templates-test-rust
 templats-test-rust: ## Test Rust templates
 	cd templates/rust/cloudevents && cargo -q test && cargo clean
 	cd templates/rust/http && cargo -q test && cargo clean
 
+.PHONY: templates-test-typescript
 templates-test-typescript: ## Test Typescript templates
 	cd templates/typescript/cloudevents && npm ci && npm test && rm -rf node_modules build
 	cd templates/typescript/http && npm ci && npm test && rm -rf node_modules build
@@ -185,8 +194,10 @@ templates-test-typescript: ## Test Typescript templates
 ###############
 
 # Pulls runtimes then rebuilds the embedded filesystem
+.PHONY: update-runtimes
 update-runtimes:  update-runtime-go generate/zz_filesystem_generated.go ## Update Scaffolding Runtimes
 
+.PHONY: update-runtime-go
 update-runtime-go:
 	cd templates/go/scaffolding/instanced-http && go get -u knative.dev/func-go/http
 	cd templates/go/scaffolding/static-http && go get -u knative.dev/func-go/http
@@ -194,7 +205,7 @@ update-runtime-go:
 	cd templates/go/scaffolding/static-cloudevents && go get -u knative.dev/func-go/cloudevents
 
 
-.PHONY: cert
+.PHONY: certs
 certs: templates/certs/ca-certificates.crt ## Update root certificates
 
 .PHONY: templates/certs/ca-certificates.crt
@@ -222,6 +233,7 @@ func-instrumented-bin: # Binary instrumented with coverage reporting for E2E tes
 ##@ Release Artifacts
 ######################
 
+.PHONY: cross-platform
 cross-platform: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 linux-ppc64le linux-s390x windows ## Build all distributable (cross-platform) binaries
 
 darwin-arm64: $(BIN_DARWIN_ARM64) ## Build for mac M1
@@ -263,10 +275,12 @@ $(BIN_WINDOWS): generate/zz_filesystem_generated.go
 ##@ Schemas
 ######################
 
+.PHONY: schema-generate
 schema-generate: schema/func_yaml-schema.json ## Generate func.yaml schema
 schema/func_yaml-schema.json: pkg/functions/function.go pkg/functions/function_*.go
 	go run schema/generator/main.go
 
+.PHONY: schema-check
 schema-check: ## Check that func.yaml schema is up-to-date
 	mv schema/func_yaml-schema.json schema/func_yaml-schema-previous.json
 	make schema-generate
