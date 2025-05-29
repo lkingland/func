@@ -1,3 +1,6 @@
+//go:build e2e
+// +build e2e
+
 /*
 Package e2e provides an end-to-end test suite for the Functions CLI "func".
 
@@ -822,15 +825,15 @@ func TestRemote_Dir(t *testing.T) {
 //	 3.  Deploy and run
 //	 4.  Deply and run via a remote build
 
-var unsupported = []struct {
-	Runtime  string // go, python, node, typescript rust,
-	Builder  string // host, pack, s2i
-	Template string // http, cloudevent
-	Source   string // local, remote, remote-ref
-	Test     string // run, deploy, remote
-}{
-	{Runtime: "go", Builder: "s2i", Test: "remote"},
-}
+// var unsupported = []struct {
+// 	Runtime  string // go, python, node, typescript rust,
+// 	Builder  string // host, pack, s2i
+// 	Template string // http, cloudevent
+// 	Source   string // local, remote, remote-ref
+// 	Test     string // run, deploy, remote
+// }{
+// 	{Runtime: "go", Builder: "s2i", Test: "remote"},
+// }
 
 // ---------------------------------------------------------------------------
 func TestMatrix(t *testing.T) {
@@ -911,7 +914,9 @@ func cdTemp(t *testing.T, name string) string {
 		panic(err)
 	}
 	t.Cleanup(func() {
-		os.Chdir(pwd)
+		if err := os.Chdir(pwd); err != nil {
+			panic(err)
+		}
 	})
 	return tmp
 }
@@ -991,7 +996,7 @@ func waitFor(t *testing.T, address string) (ok bool) {
 			continue
 		}
 		defer res.Body.Close()
-		if strings.Index(string(body), "test-echo-param") == -1 {
+		if strings.Contains(string(body), "test-echo-param") {
 			t.Log("Response received, but it does not appear to be an echo.")
 			t.Logf("Response: %s\n", body)
 			continue
