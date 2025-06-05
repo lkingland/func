@@ -180,7 +180,8 @@ type Instance struct {
 	Name          string         `json:"name" yaml:"name"`
 	Image         string         `json:"image" yaml:"image"`
 	Namespace     string         `json:"namespace" yaml:"namespace"`
-	Subscriptions []Subscription `json:"subscriptions" yaml:"subscriptions"`
+	Subscriptions []Subscription    `json:"subscriptions" yaml:"subscriptions"`
+	Labels        map[string]string `json:"labels" yaml:"labels"`
 }
 
 // Subscriptions currently active to event sources

@@ -226,7 +226,7 @@ test-all: func-instrumented-bin ## Run all tests (unit, integraiton, e2e)
 	go test -tags integration e2e -race -cover -timeout 30m --coverprofile=coverage.txt ./... -v
 
 .PHONY: func-instrumented-bin
-func-instrumented-bin: # Binary instrumented with coverage reporting for E2E tests
+func-instrumented-bin: # func binary instrumented with coverage reporting
 	env CGO_ENABLED=1 go build -cover -o func ./cmd/$(BIN)
 
 ######################
