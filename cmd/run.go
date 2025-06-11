@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,7 +29,7 @@ NAME
 SYNOPSIS
 	{{rootCmdUse}} run [-t|--container] [-r|--registry] [-i|--image] [-e|--env]
 	             [--build] [-b|--builder] [--builder-image] [-c|--confirm]
-	             [-v|--verbose]
+	             [-v|--verbose] [--json]
 
 DESCRIPTION
 	Run the function locally.
@@ -68,9 +69,12 @@ EXAMPLES
 
 	o Run the function locally on the host with no containerization (Go only).
 	  $ {{rootCmdUse}} run --container=false
+
+	o Run the function locally and output JSON with the service address.
+	  $ {{rootCmdUse}} run --json
 `,
 		SuggestFor: []string{"rnu"},
-		PreRunE:    bindEnv("build", "builder", "builder-image", "confirm", "container", "env", "image", "path", "registry", "start-timeout", "verbose"),
+		PreRunE:    bindEnv("build", "builder", "builder-image", "confirm", "container", "env", "image", "path", "registry", "start-timeout", "verbose", "json"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRun(cmd, newClient)
 		},
@@ -124,6 +128,7 @@ EXAMPLES
 	cmd.Flags().String("build", "auto",
 		"Build the function. [auto|true|false]. ($FUNC_BUILD)")
 	cmd.Flags().Lookup("build").NoOptDefVal = "true" // register `--build` as equivalient to `--build=true`
+	cmd.Flags().Bool("json", false, "Output as JSON. ($FUNC_JSON)")
 
 	// Oft-shared flags:
 	addConfirmFlag(cmd, cfg.Confirm)
@@ -164,6 +169,11 @@ func runRun(cmd *cobra.Command, newClient ClientFactory) (err error) {
 	}
 	if f, err = cfg.Configure(f); err != nil { // Updates f with deploy cfg
 		return
+	}
+
+	// Ignore the verbose flag if JSON output
+	if cfg.JSON {
+		cfg.Verbose = false
 	}
 
 	// Client
@@ -244,7 +254,27 @@ func runRun(cmd *cobra.Command, newClient ClientFactory) (err error) {
 		}
 	}()
 
-	fmt.Fprintf(cmd.OutOrStderr(), "Running on host port %v\n", job.Port)
+	// Output based on format
+	if cfg.JSON {
+		// Create JSON output structure
+		output := struct {
+			Address string `json:"address"`
+			Host    string `json:"host"`
+			Port    string `json:"port"`
+		}{
+			Address: fmt.Sprintf("http://%s:%s", job.Host, job.Port),
+			Host:    job.Host,
+			Port:    job.Port,
+		}
+
+		jsonData, err := json.Marshal(output)
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON output: %w", err)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), string(jsonData))
+	} else {
+		fmt.Fprintf(cmd.OutOrStderr(), "Running on host port %v\n", job.Port)
+	}
 
 	select {
 	case <-cmd.Context().Done():
@@ -285,6 +315,9 @@ type runConfig struct {
 	// StartTimeout optionally adjusts the startup timeout from the client's
 	// default of fn.DefaultStartTimeout.
 	StartTimeout time.Duration
+
+	// JSON output format
+	JSON bool
 }
 
 func newRunConfig(cmd *cobra.Command) (c runConfig) {
@@ -294,6 +327,7 @@ func newRunConfig(cmd *cobra.Command) (c runConfig) {
 		Env:          viper.GetStringSlice("env"),
 		Container:    viper.GetBool("container"),
 		StartTimeout: viper.GetDuration("start-timeout"),
+		JSON:         viper.GetBool("json"),
 	}
 	// NOTE: .Env should be viper.GetStringSlice, but this returns unparsed
 	// results and appears to be an open issue since 2017:
