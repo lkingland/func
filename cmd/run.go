@@ -29,7 +29,7 @@ NAME
 SYNOPSIS
 	{{rootCmdUse}} run [-t|--container] [-r|--registry] [-i|--image] [-e|--env]
 	             [--build] [-b|--builder] [--builder-image] [-c|--confirm]
-	             [-v|--verbose] [--json]
+	             [--address] [-v|--verbose] [--json]
 
 DESCRIPTION
 	Run the function locally.
@@ -72,9 +72,12 @@ EXAMPLES
 
 	o Run the function locally and output JSON with the service address.
 	  $ {{rootCmdUse}} run --json
+
+	o Run the function locally on a specific address.
+	  $ {{rootCmdUse}} run --address=0.0.0.0:8081
 `,
 		SuggestFor: []string{"rnu"},
-		PreRunE:    bindEnv("build", "builder", "builder-image", "confirm", "container", "env", "image", "path", "registry", "start-timeout", "verbose", "json"),
+		PreRunE:    bindEnv("address", "build", "builder", "builder-image", "confirm", "container", "env", "image", "path", "registry", "start-timeout", "verbose", "json"),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRun(cmd, newClient)
 		},
@@ -129,6 +132,8 @@ EXAMPLES
 		"Build the function. [auto|true|false]. ($FUNC_BUILD)")
 	cmd.Flags().Lookup("build").NoOptDefVal = "true" // register `--build` as equivalient to `--build=true`
 	cmd.Flags().Bool("json", false, "Output as JSON. ($FUNC_JSON)")
+	cmd.Flags().String("address", "",
+		"Interface and port on which to bind and listen. Default is 127.0.0.1:8080, or an available port if 8080 is not available. ($FUNC_ADDRESS)")
 
 	// Oft-shared flags:
 	addConfirmFlag(cmd, cfg.Confirm)
@@ -244,7 +249,7 @@ func runRun(cmd *cobra.Command, newClient ClientFactory) (err error) {
 	// For the former, build is required and a container runtime.  For the
 	// latter, scaffolding is first applied and the local host must be
 	// configured to build/run the language of the function.
-	job, err := client.Run(cmd.Context(), f)
+	job, err := client.Run(cmd.Context(), f, fn.RunWithAddress(cfg.Address))
 	if err != nil {
 		return
 	}
@@ -318,6 +323,9 @@ type runConfig struct {
 
 	// JSON output format
 	JSON bool
+
+	// Address is the interface and port to bind (e.g. "0.0.0.0:8081")
+	Address string
 }
 
 func newRunConfig(cmd *cobra.Command) (c runConfig) {
@@ -328,6 +336,7 @@ func newRunConfig(cmd *cobra.Command) (c runConfig) {
 		Container:    viper.GetBool("container"),
 		StartTimeout: viper.GetDuration("start-timeout"),
 		JSON:         viper.GetBool("json"),
+		Address:      viper.GetString("address"),
 	}
 	// NOTE: .Env should be viper.GetStringSlice, but this returns unparsed
 	// results and appears to be an open issue since 2017:

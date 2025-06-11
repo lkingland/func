@@ -27,7 +27,7 @@ func NewRunner() *Runner {
 	}
 }
 
-func (r *Runner) Run(ctx context.Context, f fn.Function, t time.Duration) (*fn.Job, error) {
+func (r *Runner) Run(ctx context.Context, f fn.Function, addr string, t time.Duration) (*fn.Job, error) {
 	r.Lock()
 	defer r.Unlock()
 	r.RunInvoked = true
