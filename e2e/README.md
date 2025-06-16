@@ -1,26 +1,26 @@
 # E2E (end-to-end) Tests
 
-E2E test confirm the functionality of the system end-to-end from the
+E2E tests confirm the functionality of the system end-to-end from the
 perspective of a user employing the Functions CLI `func`, either standalone
 or as a plugin to `kn` (`kn func`).
 
-E2E tests are designed in a way that they be easily runnable (and thus
+E2E tests are designed in a way that they can be easily runnable (and thus
 debuggable) locally by a developer, in addition to remotely in CI as
 acceptance criteria for pull requests.
 
 ## Runnning E2Es locally: a Quick-start
 
 - `./hack/install-binaries.sh`  Fetch binaries into `./hack/bin`
-- `./hack/registry.sh`          Configure system for insecure local registrires
+- `./hack/registry.sh`          (once) Configure insecure local registriry
 - `./hack/allocate.sh`          Create a cluster and kube config in `./hack/bin`
-- `make test-e2e`               Run all tests using these bins and cluster
+- `make test-all`               Run all tests using these binaries and cluster
 - `./hack/delete.sh`            Remove the cluster
 
 
 ## Overview
 
-Tests themselves are separated into five categories:  Core, Metadata,
-Remote, and Matrix.
+Tests themselves are separated into categories:  Core, Metadata,
+Remote, Podman, and Matrix.
 
 Core tests include checking the basic CRUDL operations; Create, Read, Update,
 Delete and List.  Creation is implemented as `func init`, running the function
@@ -37,6 +37,9 @@ labels, volumes, secrets and event subscriptions.
 
 Remote tests confirm features related to building and deploying remotely
 via in-cluster builds, etc.
+
+Podman tests ensure that the Podman container engine is also supported.  Note
+that these tests require that 'podman' and 'ssh' are available in your path.
 
 Matrix tests is a larger set which checks operations which differ in
 implementation between language runtimes.  The primary operations which
@@ -109,6 +112,42 @@ found in the current session's PATH.
 
 `FUNC_E2E_VERBOSE`: instructs the test suite to run all commands in
 verbose mode.
+
+`FUNC_E2E_CLEAN`: controls whether tests clean up deployed functions after
+completion. When set to "true" (default), functions are deleted after each
+test. Set to "false" to leave functions deployed for debugging. This speeds
+up test execution when the same cluster is reused across multiple test runs.
+
+`FUNC_E2E_DOCKER_HOST`: sets the DOCKER_HOST environment variable for
+container operations during tests. This is useful when using a remote Docker
+daemon or when the Docker socket is not at the default location.
+
+`FUNC_E2E_HOME`: sets a custom home directory path for test execution. By
+default, tests create a temporary `.func_e2e_home` directory within each
+test's clean environment. Use this to debug tests with a persistent home
+directory, but note that all tests in the invocation will share this home.
+
+`FUNC_E2E_KUBECTL`: specifies the path to the kubectl binary used during
+tests. Defaults to the kubectl found in PATH. Tests use kubectl to manipulate
+cluster state as necessary, such as creating secrets and configmaps.
+
+`FUNC_E2E_MATRIX`: enables comprehensive matrix testing across different
+combinations of runtimes, builders, and templates. When set to "true",
+the test suite will run tests for all supported permutations. Defaults to
+"false" for faster test execution.
+
+`FUNC_E2E_MATRIX_TEMPLATES`: sets which templates will be tested during matrix
+tests. Accepts a comma-separated list (e.g., "http,cloudevents"). By default,
+both "http" and "cloudevents" templates are tested when matrix tests are enabled.
+
+`FUNC_E2E_PODMAN`: enables tests specifically for the Podman container engine.
+When set to "true", tests will verify that functions can be built and deployed
+using Podman with both Pack and S2I builders. Requires `FUNC_E2E_PODMAN_HOST`
+to be set.
+
+`FUNC_E2E_PODMAN_HOST`: specifies the Podman socket path for Podman-specific
+tests. This is required when `FUNC_E2E_PODMAN` is enabled. Example:
+"unix:///run/user/1000/podman/podman.sock" for rootless Podman.
 
 ## Running
 

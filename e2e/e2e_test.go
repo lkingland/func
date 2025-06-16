@@ -1,6 +1,3 @@
-//go:build e2e
-// +build e2e
-
 /*
 Package e2e provides an end-to-end test suite for the Functions CLI "func".
 
@@ -11,8 +8,10 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -39,6 +38,15 @@ const (
 	// NOte this is always relative to this test file.
 	DefaultBin = "../func"
 
+	// DefaultClean indicates whether or not tests should clean up after
+	// themsleves by deleting Function instances created during run.
+	// Setting this to false significantly increases testing speed, but
+	// results in lingering funciton instances after at test run.  Set to
+	// "false" when expecting the test cluster to be removed after a test run,
+	// such as in CI, but set to "true" for development, when the same test
+	// cluster may be used across multiple test runs during debugging.
+	DefaultClean = true
+
 	// DefaultGocoverdir defines the default path to use for the GOCOVERDIR
 	// while executing tests.  This value can be altered using
 	// FUNC_E2E_GOCOVERDIR. While this value could be passed through using
@@ -47,18 +55,20 @@ const (
 	// likewise also isolated using the "FUNC_E2E_" prefix.
 	DefaultGocoverdir = "../.coverage"
 
-	// DefaultHome to use for all commands which are not explicitly setting
-	// a home of a given state.  This will be removed as there is work being
-	// undertaken at this time to remove the dependency on a home directory
-	// in the Docker credentials system.  When complete, most commands will
-	// not require HOME.
-	DefaultHome = "./testdata/default_home"
+	// DefaultHome is defined as the .func_e2e_home directory within the
+	// clean environment (temp directory) created for each test.  This can
+	// be overridden with FUNC_E2E_HOME.
+	DefaultHome = ".func_e2e_home"
 
 	// DefaultKubeconfig is the default path (relative to this test file) at
 	// which the kubeconfig can be found which was created when setting up
 	// a local test cluster using the allocate.sh script.  This can be
 	// overridden using FUNC_E2E_KUBECONFIG.
 	DefaultKubeconfig = "../hack/bin/kubeconfig.yaml"
+
+	// DefaultNamespace for E2E tests is that used by deafult in the
+	// CLI being tested.
+	DefaultNamespace = cmd.DefaultNamespace
 
 	// DefaultRegistry to use when running the e2e tests.  This is the URL
 	// of the registry created by default when using the allocate.sh script
@@ -69,9 +79,11 @@ const (
 	// DefaultVerbose sets the default for the --verbose flag of all commands.
 	DefaultVerbose = false
 
-	// DefaultNamespace for E2E tests is that used by deafult in the
-	// CLI being tested.
-	DefaultNamespace = cmd.DefaultNamespace
+	// DefaultTools is the path to supporting tools.
+	DefaultTools = "../hack/bin"
+
+	// DefaultTestdata is the path to supporting testdata
+	DefaultTestdata = "./testdata"
 )
 
 // Final Settings
@@ -81,33 +93,23 @@ var (
 	// Can be set with FUNC_E2E_BIN.
 	Bin string
 
-	// Plugin indicates func is being run as a plugin within Bin, and
-	// the value of this argument is the subcommand.  For example, when
-	// running e2e tests as a plugin to `kn`, Bin will be /path/to/kn and
-	// 'Plugin' would be 'func'.  The resultant commands would then be
-	//  /path/to/kn func {command}
-	// Can be set with FUNC_E2E_PLUGIN
-	Plugin string
+	// Clean
+	Clean bool // wait for each test function to be removed before continuing
 
-	// Registry is the container registry to use by default for tests;
-	// defaulting to the local container registry set up by the allocation
-	// scripts running on localhost:5000.
-	// Can be set with FUNC_E2E_REGISTRY
-	Registry string
+	// DockerHost is the DOCKER_HOST value to use for tests.
+	// Can be set with FUNC_E2E_DOCKER_HOST.
+	DockerHost string
 
-	// Matrix indicates a full matrix test should be run.  Defaults to false.
-	// Enable with FUNC_E2E_MATRIX=true
-	Matrix bool
+	// Gocoverdir is the path to the directory which will be used for Go's
+	// coverage reporting, provided to the test binary as GOCOVERDIR.  By
+	// default the current user's environment is not used, and by default this
+	// is set to ../.coverage (as relative to this test file).  This value
+	// can be overridden with FUNC_E2E_GOCOVERDIR.
+	Gocoverdir string
 
-	// MatrixRuntimes for which runtime-specific tests should be run.  Defaults
-	// to all core language runtimes.  Can be set with FUNC_E2E_MATRIX_RUNTIMES
-	MatrixRuntimes = []string{"go", "python", "node", "rust", "typescript", "quarkus", "springboot"}
-
-	// MatrixBuilders specifies builders to check in addition to the "host"
-	// builder which is used
-	// by default.  Used for Builder-specific tests.  Can be set with
-	// FUNC_E2E_MATRIX_BUILDERS.
-	MatrixBuilders = []string{"host", "pack", "s2i"}
+	// Home is the final path to the Home used when running tests ($HOME)
+	// can be overridden with FUNC_E2E_HOME
+	Home string
 
 	// Kubeconfig is the path at which a kubeconfig suitable for running
 	// E2E tests can be found.  By default the config located in
@@ -117,35 +119,55 @@ var (
 	// Instead, this can be set explicitly using FUNC_E2E_KUBECONFIG.
 	Kubeconfig string
 
-	// Gocoverdir is the path to the directory which will be used for Go's
-	// coverage reporting, provided to the test binary as GOCOVERDIR.  By
-	// default the current user's environment is not used, and by default this
-	// is set to ../.coverage (as relative to this test file).  This value
-	// can be overridden with FUNC_E2E_GOCOVERDIR.
-	Gocoverdir string
+	// Matrix indicates a full matrix test should be run.  Defaults to false.
+	// Enable with FUNC_E2E_MATRIX=true
+	Matrix bool
 
-	// Go is the path to the go binary to instruct commands to use when
-	// completing tasks which require the go toolchain.  Will be set by
-	// default to the Go found in PATH, but can be overridden with
-	// FUNC_E2E_GO.
-	Go string
+	// MatrixBuilders specifies builders to check during matrix tests.
+	// Can be set with FUNC_E2E_MATRIX_BUILDERS.
+	MatrixBuilders = []string{"host", "pack", "s2i"}
 
-	// Git is the path to the git binary to be provided to commands to use
-	// which utilize git features.  For example when building containers,
-	// the current git version is provided to the running function as an
-	// environment variable.  This will default to the git found in PATH, but
-	// can be overridden with FUNC_E2E_GIT.
-	Git string
+	// MatrixRuntimes for which runtime-specific tests should be run.  Defaults
+	// to all core language runtimes.  Can be set with FUNC_E2E_MATRIX_RUNTIMES
+	// MatrixRuntimes = []string{"go", "python", "node", "rust", "typescript", "quarkus", "springboot"}
+	MatrixRuntimes = []string{"go"}
 
-	// Home is the final path to the default Home directory used for tests
-	// which do not set it explicitly.
-	Home string
+	// MatrixTemplates specifies the templates to check during matrix tests.
+	MatrixTemplates = []string{"http", "cloudevents"}
 
-	// Clean
-	Clean bool // wait for each test function to be removed before continuing
+	// Plugin indicates func is being run as a plugin within Bin, and
+	// the value of this argument is the subcommand.  For example, when
+	// running e2e tests as a plugin to `kn`, Bin will be /path/to/kn and
+	// 'Plugin' would be 'func'.  The resultant commands would then be
+	//  /path/to/kn func {command}
+	// Can be set with FUNC_E2E_PLUGIN
+	Plugin string
+
+	// PodmanHost is the DOCKER_HOST value to use specifically for Podman tests.
+	// Can be set with FUNC_E2E_PODMAN_HOST.
+	PodmanHost string
+
+	// Registry is the container registry to use by default for tests;
+	// defaulting to the local container registry set up by the allocation
+	// scripts running on localhost:5000.
+	// Can be set with FUNC_E2E_REGISTRY
+	Registry string
+
+	// Podman indicates that the Pack and S2I builders should be used and
+	// checked with the Podman container engine.
+	Podman bool = false
 
 	// Verbose mode for all command runs.
 	Verbose bool
+
+	// Tools is the path to tools which the E2E tests should use with
+	// precidence.  It's a path, and is prepended to PATH.  By default this
+	// is ./hack/bin which contains commands installed via ./hack/binaries.sh
+	// (and should be of a known compatible version).
+	Tools string
+
+	// Testdat is the path to the testdata directory.
+	Testdata string
 )
 
 // ---------------------------------------------------------------------------
@@ -160,10 +182,8 @@ var (
 //
 //	func init
 func TestCore_Init(t *testing.T) {
-	// Assemble
-	resetEnv()
 	name := "func-e2e-test-core-init"
-	root := cdTemp(t, name)
+	root := fromCleanEnv(t, name)
 
 	// Act (newCmd == "func ...")
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
@@ -185,22 +205,24 @@ func TestCore_Init(t *testing.T) {
 //
 //	func run
 func TestCore_Run(t *testing.T) {
-	resetEnv()
 	name := "func-e2e-test-core-run"
-	_ = cdTemp(t, name) // sets Function name obliquely, see docs
+	_ = fromCleanEnv(t, name)
 
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := newCmd(t, "run")
+	address, err := chooseOpenAddress(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := newCmd(t, "run", "--address", address)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 
-	// TODO: implement structured command output (ex --json or --output=json),
-	// parse it, and use that to find the listen address.
-	if !waitFor(t, "http://localhost:8080") {
+	// Wait for echo
+	if !waitForEcho(t, "http://"+address) {
 		t.Fatalf("service does not appear to have started correctly.")
 	}
 
@@ -218,38 +240,32 @@ func TestCore_Run(t *testing.T) {
 // TestCore_Deploy ensures that a function can be deployed to the cluster.
 //
 //	func deploy
-func TestCore_Deploy(t *testing.T) {
-	resetEnv()
+func TestCore_Deploy_Basic(t *testing.T) {
 	name := "func-e2e-test-core-deploy"
-	_ = cdTemp(t, name) // sets Function name obliquely, see function docs
+	_ = fromCleanEnv(t, name)
 
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := newCmd(t, "deploy")
-	if err := cmd.Start(); err != nil {
+	if err := newCmd(t, "deploy").Run(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
 
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("deploy error. %v", err)
-	}
-
-	if !waitFor(t, "http://func-e2e-test-deploy.default.127.0.0.1.sslip.io") {
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
 		t.Fatalf("function did not deploy correctly")
 	}
 }
 
 // TestCore_Deploy_Template ensures that the system supports creating
 // functions based off templates in a remote repository.
+// func deploy --repository=https://github.com/alice/myfunction
 func TestCore_Deploy_Template(t *testing.T) {
-	resetEnv()
 	name := "func-e2e-test-core-deploy-template"
-	_ = cdTemp(t, name) // sets Function name obliquely, see function docs
+	_ = fromCleanEnv(t, name)
 
 	// Creates a new Function from the template located in the repository at a
 	// well-known path:  {repo}/{runtime}/{template} where
@@ -268,7 +284,7 @@ func TestCore_Deploy_Template(t *testing.T) {
 
 	// The default implementation responds with HTTP 200 and the string
 	// "testcore-deploy-template" for all requests.
-	if !waitForContent(t, "http://func-e2e-test-deploy-template.default.127.0.0.1.sslip.io", "func-e2e-test-deploy-template") {
+	if !waitForContent(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), name) {
 		t.Fatalf("function did not update correctly")
 	}
 }
@@ -282,8 +298,8 @@ func TestCore_Deploy_Source(t *testing.T) {
 	t.Log("Not Implemeted: running a local deploy from source code in a remote repo is not currently an implemented feature because this can be easily accomplished with `git clone ... && func deoploy`")
 	// Should this be a feature implemented in the future (mostly just a
 	// convenience command), the test would be as follows:
-	// resetEnv()
-	// name := "func-e2e-test-deploy-source"
+	// resetEnv(t)
+	// name := "func-e2e-test-core-deploy-source"
 	// _ = cdTemp(t, name) // sets Function name obliquely, see function docs
 	//
 	// if err := newCmd(t, "deploy", "--git-url=https://github.com/functions-dev/func-e2e-tests").Run(); err != nil {
@@ -300,11 +316,9 @@ func TestCore_Deploy_Source(t *testing.T) {
 // TestCore_Update ensures that a running function can be updated.
 //
 // func deploy
-// TODO: merge with TestCore_Deploy and note it is an "upsert"
 func TestCore_Update(t *testing.T) {
-	resetEnv()
 	name := "func-e2e-test-core-update"
-	root := cdTemp(t, name) // sets Function name obliquely, see function docs
+	root := fromCleanEnv(t, name)
 
 	// create
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
@@ -318,7 +332,7 @@ func TestCore_Update(t *testing.T) {
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
-	if !waitFor(t, "http://func-e2e-test-core-update.default.127.0.0.1.sslip.io") {
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
 		t.Fatalf("function did not deploy correctly")
 	}
 
@@ -338,10 +352,7 @@ func TestCore_Update(t *testing.T) {
 	if err := newCmd(t, "deploy").Run(); err != nil {
 		t.Fatal(err)
 	}
-
-	// TODO: change to wait for echo of something in particular that
-	// ensures the above update took.
-	if !waitForContent(t, "http://func-e2e-test-core-update.default.127.0.0.1.sslip.io", "UPDATED") {
+	if !waitForContent(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), "UPDATED") {
 		t.Fatalf("function did not update correctly")
 	}
 }
@@ -351,8 +362,47 @@ func TestCore_Update(t *testing.T) {
 //
 //	func describe
 func TestCore_Describe(t *testing.T) {
-	// TODO
-	t.Log("Not Implemented")
+	name := "func-e2e-test-core-describe"
+	_ = fromCleanEnv(t, name)
+
+	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newCmd(t, "deploy")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("deploy error. %v", err)
+	}
+
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not deploy correctly")
+	}
+
+	// Call func describe with JSON output
+	cmd = newCmd(t, "describe", "--output=json")
+	out := bytes.Buffer{}
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Parse the JSON output
+	var instance fn.Instance
+	if err := json.Unmarshal(out.Bytes(), &instance); err != nil {
+		t.Fatalf("error unmarshaling describe output: %v", err)
+	}
+
+	// Validate that the name matches what we expect
+	if instance.Name != name {
+		t.Errorf("Expected name %q, got %q", name, instance.Name)
+	}
 }
 
 // TestCore_Invoke ensures that the invoke helper functions for both
@@ -360,10 +410,8 @@ func TestCore_Describe(t *testing.T) {
 //
 //	func invoke
 func TestCore_Invoke(t *testing.T) {
-	t.Log("Not Implemented")
-	resetEnv()
 	name := "func-e2e-test-core-invoke"
-	_ = cdTemp(t, name) // sets Function name obliquely, see function docs
+	_ = fromCleanEnv(t, name)
 
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
 		t.Fatal(err)
@@ -373,7 +421,12 @@ func TestCore_Invoke(t *testing.T) {
 	// ----------------------------------------
 	// Runs the funciton locally, which `func invoke` will invoke when
 	// it detects it is running.
-	cmd := newCmd(t, "run")
+	address, err := chooseOpenAddress(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newCmd(t, "run", "--address", address)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -384,12 +437,15 @@ func TestCore_Invoke(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "error interrupting. %v", err)
 		}
 	}()
+
 	// TODO: complete implementation of `func run --json` structured output
 	// such that we can parse it for the actual listen address in the case
 	// that there is already something else running on 8080
-	if !waitFor(t, "http://localhost:8080") {
+	if !waitForEcho(t, "http://"+address) {
 		t.Fatalf("service does not appear to have started correctly.")
 	}
+
+	// Check invoke
 	cmd = newCmd(t, "invoke", "--data=func-e2e-test-core-invoke-local")
 	out := bytes.Buffer{}
 	cmd.Stdout = &out
@@ -411,7 +467,7 @@ func TestCore_Invoke(t *testing.T) {
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
-	if !waitFor(t, "http://func-e2e-test-core-invoke.default.127.0.0.1.sslip.io") {
+	if !waitForEcho(t, "http://func-e2e-test-core-invoke.default.127.0.0.1.sslip.io") {
 		t.Fatalf("function did not deploy correctly")
 	}
 	cmd = newCmd(t, "invoke", "--data=func-e2e-test-core-invoke-remote")
@@ -424,33 +480,32 @@ func TestCore_Invoke(t *testing.T) {
 		t.Logf("out: %v", out.String())
 		t.Fatal("function invocation did not echo data provided")
 	}
-
 }
 
-// TestCore_delete ensures that a function registered as deleted when deleted.
+// TestCore_Delete ensures that a function registered as deleted when deleted.
 // Also tests list as a side-effect.
 //
 //	func delete
-func TestCore_delete(t *testing.T) {
+func TestCore_Delete(t *testing.T) {
 	name := "func-e2e-test-core-delete"
-	_ = cdTemp(t, name) // sets Function name obliquely, see function docs
+	_ = fromCleanEnv(t, name)
 
-	// create
+	// Deploy a Function
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
 		t.Fatal(err)
 	}
 
-	// deploy
 	if err := newCmd(t, "deploy").Run(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
-	if !waitFor(t, "http://func-e2e-test-core-delete.default.127.0.0.1.sslip.io") {
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
 		t.Fatalf("function did not deploy correctly")
 	}
 
+	// Check it appears in the list
 	client := fn.New(fn.WithLister(knative.NewLister(false)))
 	list, err := client.List(context.Background(), DefaultNamespace)
 	if err != nil {
@@ -462,6 +517,7 @@ func TestCore_delete(t *testing.T) {
 		t.Fatal("Instance list did not contain the 'delete' test service")
 	}
 
+	// Delete the Function
 	if err := newCmd(t, "delete").Run(); err != nil {
 		t.Logf("Error deleting function. %v", err)
 	}
@@ -471,6 +527,7 @@ func TestCore_delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Check it no longer appears in the list
 	if containsInstance(t, list, name, DefaultNamespace) {
 		t.Logf("list: %v", list)
 		t.Fatalf("Instance %q is still shown as available", name)
@@ -493,9 +550,8 @@ func TestCore_delete(t *testing.T) {
 //
 //	func config envs add --name={name} --value={value}
 func TestMetadata_Envs_Add(t *testing.T) {
-	resetEnv()
 	name := "func-e2e-test-metadata-envs-add"
-	root := cdTemp(t, name)
+	root := fromCleanEnv(t, name)
 
 	// Create the test Function
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
@@ -592,7 +648,7 @@ func TestMetadata_Envs_Add(t *testing.T) {
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
-	if !waitForContent(t, "http://func-e2e-test-metadata-envs-add.default.127.0.0.1.sslip.io", "OK") {
+	if !waitForContent(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), "OK") {
 		t.Fatalf("handler failed")
 	}
 
@@ -604,12 +660,8 @@ func TestMetadata_Envs_Add(t *testing.T) {
 //
 //	func config envs remove --name={name}
 func TestMetadata_Envs_Remove(t *testing.T) {
-	// The ability to remove an env via a command appears to never have been
-	// implemented (`func envs remove --name=B`).
-	// t.Skip("This feature is not yet implemented")
-	resetEnv()
 	name := "func-e2e-test-metadata-envs-remove"
-	root := cdTemp(t, name)
+	root := fromCleanEnv(t, name)
 
 	// Create the test Function
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
@@ -655,7 +707,7 @@ func TestMetadata_Envs_Remove(t *testing.T) {
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
-	if !waitForContent(t, "http://func-e2e-test-metadata-envs-remove.default.127.0.0.1.sslip.io", "OK") {
+	if !waitForContent(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), "OK") {
 		t.Fatalf("handler failed")
 	}
 
@@ -690,65 +742,340 @@ func TestMetadata_Envs_Remove(t *testing.T) {
 	if err := newCmd(t, "deploy").Run(); err != nil {
 		t.Fatal(err)
 	}
-	if !waitForContent(t, "http://func-e2e-test-metadata-envs-remove.default.127.0.0.1.sslip.io", "OK") {
+	if !waitForContent(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), "OK") {
 		t.Fatalf("handler failed")
 	}
 }
 
-// TestMetadata_Labels ensures that labels added via the CLI are
-// carried through to the final service, and can subsequently be removed.
+// TestMetadata_Labels_Add ensures that labels added via the CLI are
+// carried through to the final service
 //
 // func config labels add
-// func config labels remove
-func TestMetadata_Labels(t *testing.T) {
-	// Note: As with the environment variable's "remove" feature, this was
-	// also not implemented (interactive only).  The following commands
-	// need to be implemented, and then E2E tested here:
+func TestMetadata_Labels_Add(t *testing.T) {
+	name := "func-e2e-test-metadata-labels-add"
+	_ = fromCleanEnv(t, name)
 
-	// By static value
-	// func config labels add --name=A --value="a"
-	t.Log("Not Implemented: static label value")
+	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
+		t.Fatal(err)
+	}
 
-	// From environment variable
-	// func config labels add --name=B --value="{{env:B}}"
-	t.Log("Not Implemented: label value from env")
+	// Add a label with a simple value
+	// func config labels add --name=foo --value=bar
+	if err := newCmd(t, "config", "labels", "add", "--name=foo", "--value=bar").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a label which pulls its value from an environment variable
+	// func config labels add --name=foo --value={{env:TESTLABEL}}
+	os.Setenv("TESTLABEL", "testvalue")
+	if err := newCmd(t, "config", "labels", "add", "--name=envlabel", "--value={{ env:TESTLABEL }}").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deploy the function
+	if err := newCmd(t, "deploy").Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not deploy correctly")
+	}
+
+	// Use the output from "func describe" (json output) to verify the
+	// function contains the both the test labels as expected.
+	cmd := newCmd(t, "describe", name, "--output=json", "--namespace", DefaultNamespace)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var instance fn.Instance
+	if err := json.Unmarshal(out, &instance); err != nil {
+		t.Fatalf("error unmarshaling describe output: %v", err)
+	}
+	if instance.Labels == nil {
+		t.Fatal("No labels returned")
+	}
+	if instance.Labels["foo"] != "bar" {
+		t.Errorf("Label 'foo' not found or has wrong value. Got: %v", instance.Labels["foo"])
+	}
+	if instance.Labels["envlabel"] != "testvalue" {
+		t.Errorf("Label 'envlabel' not found or has wrong value. Got: %v", instance.Labels["envlabel"])
+	}
 }
 
-// TestMetadta_Volumes ensures that adding volumes of various types are made
-// available to the running function, and can subsequently be removed
+// TestMetadata_Labels_Remove ensures that labels can be removed.
+//
+// func config labels remove
+func TestMetadata_Labels_Remove(t *testing.T) {
+	name := "func-e2e-test-metadata-labels-remove"
+	_ = fromCleanEnv(t, name)
+
+	// Create the test Function with a couple simple labels
+	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCmd(t, "config", "labels", "add", "--name=foo", "--value=bar").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCmd(t, "config", "labels", "add", "--name=foo2", "--value=bar2").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCmd(t, "deploy").Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not deploy correctly")
+	}
+
+	// Verify the labels were applied
+	cmd := newCmd(t, "describe", name, "--output=json", "--namespace", DefaultNamespace)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var desc fn.Instance
+	if err := json.Unmarshal(out, &desc); err != nil {
+		t.Fatalf("error unmarshaling describe output: %v", err)
+	}
+	if desc.Labels == nil {
+		t.Fatal("No labels returned")
+	}
+	if desc.Labels["foo"] != "bar" {
+		t.Errorf("Label 'foo' not found or has wrong value. Got: %v", desc.Labels["foo"])
+	}
+	if desc.Labels["foo2"] != "bar2" {
+		t.Errorf("Label 'foo2' not found or has wrong value. Got: %v", desc.Labels["foo2"])
+	}
+
+	// Remove one label and redeploy
+	if err := newCmd(t, "config", "labels", "remove", "--name=foo2").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newCmd(t, "deploy").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not redeploy correctly")
+	}
+
+	// Verify the function no longer includes the removed label.
+	cmd = newCmd(t, "describe", "--output=json")
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var desc2 fn.Instance
+	if err := json.Unmarshal(out, &desc2); err != nil {
+		t.Fatalf("error unmarshaling describe output: %v", err)
+	}
+	if _, ok := desc2.Labels["foo"]; !ok {
+		t.Error("Label 'foo' should still exist")
+	}
+	if _, ok := desc2.Labels["foo2"]; ok {
+		t.Error("Label 'foo' was not removed")
+	}
+}
+
+// TestMetadta_Volumes ensures that adding volumes of various types are
+// made available to the running function, and can be removed.
 //
 // func config volumes add
 // func config volumes remove
 func TestMetadata_Volumes(t *testing.T) {
-	// Note: as with both environment variable "remove" functionality and
-	// labels, volumes are also missing a way to set them via a command
-	// (noninteractively); and through the interactive prompts, only the
-	// "emptyDir" type.  The following commands (or similar) need to be
-	// implemented and tested:
+	name := "func-e3e-test-metadata-volumes"
+	root := fromCleanEnv(t, name)
 
-	// ConfigMap as a Volume
-	// func config volume add --type=configmap --name={map name} --path={path}
-	t.Log("Not Implemented: test of configMap as volume")
+	// Create the test Function
+	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
+		t.Fatal(err)
+	}
 
-	// Secret as a Volume
-	// func config volume add --type=secret --name={secret name} --path={path}
-	t.Log("Not Implemented: test of secret as volume")
+	// Cluster Test Configuration
+	// --------------------------
+	// Create test resources that will be mounted as volumes
 
-	// PersistentVolumeClaim
-	// func config volume add --type=pvc|claim --name={pvc name} --path={path}
-	t.Log("Not Implemented: test of pvc volume")
+	// Create a ConfigMap with test data
+	configMapName := fmt.Sprintf("%s-configmap", name)
+	setConfigMap(t, configMapName, DefaultNamespace, map[string]string{
+		"config.txt": "configmap-data",
+	})
 
-	// EmptyDir
-	// func config volumes add --path={path}
-	t.Log("Not Implemented: test of emptyDir volume")
+	// Create a Secret with test data
+	secretName := fmt.Sprintf("%s-secret", name)
+	setSecret(t, secretName, DefaultNamespace, map[string][]byte{
+		"secret.txt": []byte("secret-data"),
+	})
+
+	// Add volumes using the new CLI commands
+	// Add ConfigMap volume
+	if err := newCmd(t, "config", "volumes", "add",
+		"--type=configmap",
+		"--source="+configMapName,
+		"--mount-path=/etc/config").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add Secret volume
+	if err := newCmd(t, "config", "volumes", "add",
+		"--type=secret",
+		"--source="+secretName,
+		"--mount-path=/etc/secret").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add EmptyDir volume (for testing write capabilities)
+	if err := newCmd(t, "config", "volumes", "add",
+		"--type=emptydir",
+		"--mount-path=/tmp/scratch").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a Function implementation which validates the volumes.
+	impl := `package function
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+)
+
+func Handle(w http.ResponseWriter, _ *http.Request) {
+	errors := []string{}
+
+	// Check ConfigMap volume
+	configData, err := os.ReadFile("/etc/config/config.txt")
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("ConfigMap read error: %v", err))
+	} else if string(configData) != "configmap-data" {
+		errors = append(errors, fmt.Sprintf("ConfigMap data mismatch: got %q", string(configData)))
+	}
+
+	// Check Secret volume
+	secretData, err := os.ReadFile("/etc/secret/secret.txt")
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Secret read error: %v", err))
+	} else if string(secretData) != "secret-data" {
+		errors = append(errors, fmt.Sprintf("Secret data mismatch: got %q", string(secretData)))
+	}
+
+	// Check EmptyDir volume (test write capability)
+	testFile := "/tmp/scratch/test.txt"
+	testData := "emptydir-test"
+	if err := os.WriteFile(testFile, []byte(testData), 0644); err != nil {
+		errors = append(errors, fmt.Sprintf("EmptyDir write error: %v", err))
+	} else {
+		// Read it back to verify
+		readData, err := os.ReadFile(testFile)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("EmptyDir read error: %v", err))
+		} else if string(readData) != testData {
+			errors = append(errors, fmt.Sprintf("EmptyDir data mismatch: got %q", string(readData)))
+		}
+	}
+
+	if len(errors) > 0 {
+		http.Error(w, strings.Join(errors, "\n"), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintln(w, "OK")
 }
 
-// TestMetadata_Subscriptions ensures that function instances can be
+`
+	err := os.WriteFile(filepath.Join(root, "handle.go"), []byte(impl), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Deploy the function
+	if err := newCmd(t, "deploy").Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	// Verify the function has access to all volumes
+	if !waitForContent(t, fmt.Sprintf("http://%s.default.127.0.0.1.sslip.io", name), "OK") {
+		t.Fatalf("function failed to access volumes correctly")
+	}
+
+	// Test volume removal
+	// Remove the ConfigMap volume
+	if err := newCmd(t, "config", "volumes", "remove",
+		"--mount-path=/etc/config").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update implementation to verify ConfigMap is no longer accessible
+	impl = `package function
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+)
+
+func Handle(w http.ResponseWriter, _ *http.Request) {
+	errors := []string{}
+
+	// Check ConfigMap volume should NOT exist
+	if _, err := os.Stat("/etc/config"); !os.IsNotExist(err) {
+		errors = append(errors, "ConfigMap volume still exists after removal")
+	}
+
+	// Check Secret volume should still exist
+	secretData, err := os.ReadFile("/etc/secret/secret.txt")
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Secret read error: %v", err))
+	} else if string(secretData) != "secret-data" {
+		errors = append(errors, fmt.Sprintf("Secret data mismatch: got %q", string(secretData)))
+	}
+
+	// Check EmptyDir volume should still exist
+	testFile := "/tmp/scratch/test2.txt"
+	if err := os.WriteFile(testFile, []byte("test2"), 0644); err != nil {
+		errors = append(errors, fmt.Sprintf("EmptyDir write error: %v", err))
+	}
+
+	if len(errors) > 0 {
+		http.Error(w, strings.Join(errors, "\n"), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintln(w, "OK")
+}
+`
+	err = os.WriteFile(filepath.Join(root, "handle.go"), []byte(impl), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Redeploy and verify removal worked
+	if err := newCmd(t, "deploy").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !waitForContent(t, fmt.Sprintf("http://%s.default.127.0.0.1.sslip.io", name), "OK") {
+		t.Fatalf("function failed after volume removal")
+	}
+}
+
+// TODO: TestMetadata_Subscriptions ensures that function instances can be
 // subscribed to events.
 func TestMetadata_Subscriptions(t *testing.T) {
+	// TODO
 	// Create a function which emits an event with as much defaults as possible
 	// Create a function which subscribes to those events
 	// Succeed the test as soon as it receives the event
+	t.Skip("Subscritions E2E tests not yet implemented")
 }
 
 // ---------------------------------------------------------------------------
@@ -763,38 +1090,99 @@ func TestMetadata_Subscriptions(t *testing.T) {
 //
 //	func deploy --remote
 func TestRemote_Deploy(t *testing.T) {
-	resetEnv()
 	name := "func-e2e-test-remote-deploy"
-	_ = cdTemp(t, name) // sets Function name obliquely, see function docs
+	_ = fromCleanEnv(t, name)
 
 	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
 		t.Fatal(err)
 	}
-	if err := newCmd(t, "deploy", "--remote", "--builder=pack", "--registry=func-registry:50000/func").Run(); err != nil {
+	if err := newCmd(t, "deploy", "--remote", "--builder=pack", "--registry=registry.default.svc.cluster.local:5000/func").Run(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		clean(t, name, DefaultNamespace)
 	}()
 
-	if !waitFor(t, "http://func-e2e-test-remote-deploy.default.127.0.0.1.sslip.io") {
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not deploy correctly")
+	}
+}
+
+// TestRemote_Source ensures a remote build can be triggered which pulls
+// source from a remote repository.
+//
+//	func deploy --remote --git-url={url} --registry={} --builder=pack
+func TestRemote_Source(t *testing.T) {
+	name := "func-e2e-test-remote-source"
+	_ = fromCleanEnv(t, name)
+
+	// This command currently requires the function source also be available
+	// locally in order to use its name.
+	cmd := exec.Command("git", "clone", "https://github.com/functions-dev/func-e2e-tests", ".")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger the deploy
+	if err := newCmd(t, "deploy", "--remote",
+		"--git-url", "https://github.com/functions-dev/func-e2e-tests",
+		"--registry", "registry.default.svc.cluster.local:5000/func",
+		"--builder", "pack",
+	).Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	if !waitForContent(t,
+		fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), name) {
 		t.Fatalf("function did not deploy correctly")
 	}
 
 }
 
-// TestRemote_Sourece ensures a remote build can be triggered which pulls
-// source from a remote repository.
-//
-//	func deploy --remote --git-url={url}
-func TestRemote_Source(t *testing.T) {
-
-}
-
-// TestRemote_Ref ensures a remote build can be triggered which pulls sourece
-// from a specific reference (branch/tag) of a remote repository.
+// TestRemote_Ref ensures a remote build can be triggered which pulls
+// sourece from a specific reference (branch/tag) of a remote repository.
 func TestRemote_Ref(t *testing.T) {
+	name := "func-e2e-test-remote-ref"
+	_ = fromCleanEnv(t, name)
 
+	// This command currently requires the function source also be available
+	// locally in order to use its name.
+	cmd := exec.Command("git", "clone", "https://github.com/functions-dev/func-e2e-tests", ".")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// IMPORTANT: The local func.yaml must match the one in the target branch.
+	// This is a current limitation where remote builds still require local
+	// source to determine function metadata (name, runtime, etc).
+	// TODO: Remove this checkout once the implementation supports fetching
+	// function metadata from the remote repository.
+	cmd = exec.Command("git", "checkout", name)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger the deploy
+	if err := newCmd(t, "deploy", "--remote",
+		"--git-url", "https://github.com/functions-dev/func-e2e-tests",
+		"--git-branch", name,
+		"--registry", "registry.default.svc.cluster.local:5000/func",
+		"--builder", "pack",
+		"--build",
+	).Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	if !waitForContent(t,
+		fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), name) {
+		t.Fatalf("function did not deploy correctly")
+	}
 }
 
 // TestRemote_Dir ensures that remote builds can be instructed to build and
@@ -803,6 +1191,110 @@ func TestRemote_Ref(t *testing.T) {
 //	func deploy --remote --git-dir={subdir}
 //	func deploy --remote --git-dir={subdir} --git-url={url}
 func TestRemote_Dir(t *testing.T) {
+	name := "func-e2e-test-remote-dir"
+	_ = fromCleanEnv(t, name)
+
+	// This command currently requires the function source also be available
+	// locally in order to use its name.
+	cmd := exec.Command("git", "clone", "https://github.com/functions-dev/func-e2e-tests", ".")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// IMPORTANT: When using --git-dir, we need to change to that directory locally
+	// to ensure the local func.yaml matches the one that will be used in the remote build.
+	// This is a current limitation where remote builds still require local source to
+	// determine function metadata (name, runtime, etc).
+	// TODO: Remove this cd once the implementation supports fetching function metadata
+	// from the remote repository subdirectory.
+	if err := os.Chdir(name); err != nil {
+		t.Fatalf("failed to change to subdirectory %s: %v", name, err)
+	}
+
+	// Trigger the deploy
+	if err := newCmd(t, "deploy", "--remote",
+		"--git-url", "https://github.com/functions-dev/func-e2e-tests",
+		"--git-dir", name,
+		"--registry", "registry.default.svc.cluster.local:5000/func",
+		"--builder", "pack",
+		"--build",
+	).Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	if !waitForContent(t,
+		fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name), name) {
+		t.Fatalf("function did not deploy correctly")
+	}
+}
+
+// TestPodman_Pack ensures that the Podman container engine can be used to
+// deploy functions built with Pack.
+func TestPodman_Pack(t *testing.T) {
+	name := "func-e2e-test-podman-pack"
+	_ = fromCleanEnv(t, name)
+	setupPodman(t)
+
+	if !Podman {
+		t.Skip("Podman tests not enabled. Enable with FUNC_E2E_PODMAN=true and set FUNC_E2E_PODMAN_HOST to the Podman socket")
+	}
+	if PodmanHost == "" {
+		t.Skip("FUNC_E2E_PODMAN_HOST must be set to the Podman socket path")
+	}
+
+	// Create a Function
+	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deploy
+	// ------
+	if err := newCmd(t, "deploy", "--builder=pack").Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not deploy correctly")
+	}
+}
+
+// TestPodman_S2I ensures that the Podman container engine can be used to
+// deploy functions built with S2I.
+func TestPodman_S2I(t *testing.T) {
+	name := "func-e2e-test-podman-s2i"
+	_ = fromCleanEnv(t, name)
+	setupPodman(t)
+
+	if !Podman {
+		t.Skip("Podman tests not enabled. Enable with FUNC_E2E_TEST_PODMAN=true and set FUNC_E2E_PODMAN_HOST to the Podman socket")
+	}
+	if PodmanHost == "" {
+		t.Skip("FUNC_E2E_PODMAN_HOST must be set to the Podman socket path")
+	}
+
+	// Create a Function
+	if err := newCmd(t, "init", "-l=go").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deploy
+	// ------
+	if err := newCmd(t, "deploy", "--builder=s2i").Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	if !waitForEcho(t, fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)) {
+		t.Fatalf("function did not deploy correctly")
+	}
 
 }
 
@@ -815,82 +1307,228 @@ func TestRemote_Dir(t *testing.T) {
 //
 //		OS:       Linux, Mac, Windows (handled at the Git Action level)
 //		Runtime:  Go, Python, Node, Typescript, Quarkus, Springboot, Rust
-//		Template: http, CloudEvent
 //		Builder:  Host, Pack, S2I
-//		Source:   Local, Remote HEAD, Remote REF
+//		Template: http, CloudEvent
 //
 //	 Test it can:
-//	 1.  Run locally on the host
-//	 2.  Run locally within a container
-//	 3.  Deploy and run
-//	 4.  Deply and run via a remote build
+//	 1.  Run locally on the host (func run)
+//	 3.  Deploy and receive the default response (an echo)
+//	 4.  Deply and run via a remote build and receive the echo
+// -----------------
 
-// var unsupported = []struct {
-// 	Runtime  string // go, python, node, typescript rust,
-// 	Builder  string // host, pack, s2i
-// 	Template string // http, cloudevent
-// 	Source   string // local, remote, remote-ref
-// 	Test     string // run, deploy, remote
-// }{
-// 	{Runtime: "go", Builder: "s2i", Test: "remote"},
-// }
-
-// ---------------------------------------------------------------------------
-func TestMatrix(t *testing.T) {
-	t.Log("Not Implemented")
-	// For each runtime
-	//  for each builder
-	//    for both templates
-	//      - run locally on host
-	//      - run locally in container
-	//      - Deploy local code
-	//      - Deploy using on-cluster builds (--remote)
-	//      - Deploy using on-cluster builds referring to a remote repo
-	//      - Deploy using on-cluster builds referring to a remote repo w/ ref
-}
-
-// ----------------------------------------------------------------------------
-// Test Helpers
-// ----------------------------------------------------------------------------
-
-// containsInstance checks if the list includes the given instance.
-func containsInstance(t *testing.T, list []fn.ListItem, name, namespace string) bool {
-	t.Helper()
-	for _, v := range list {
-		if v.Name == name && v.Namespace == namespace {
-			return true
+// TestMatrix_Run ensures that supported runtimes and builders can run both
+// builtin templates locally.
+func TestMatrix_Run(t *testing.T) {
+	if !Matrix {
+		t.Skip("Matrix tests not enabled. Enable with FUNC_E2E_MATRIX=true")
+	}
+	for _, runtime := range MatrixRuntimes {
+		for _, builder := range MatrixBuilders {
+			for _, template := range MatrixTemplates {
+				name := fmt.Sprintf("func-e2e-matrix-%s-%s-%s-run", runtime, builder, template)
+				// Test Running Locally
+				// --------------------
+				t.Run(name, func(t *testing.T) {
+					doMatrixRun(t, name, runtime, builder, template)
+				})
+			}
 		}
 	}
-	return false
 }
 
-// resetEnv before running a test to remove all environment variables and
-// set the required environment variables to those specified during
-// initialization.
-//
-// Every test must be run with a nearly completely isolated environment,
-// otherwise a developer's local environment will affect the E2E tests when
-// run locally outside of CI. Some environment variables, provided via
-// FUNC_E2E_* or other settings, are explicitly set here.
-func resetEnv() {
-	os.Clearenv()
-	os.Setenv("HOME", Home)
-	os.Setenv("KUBECONFIG", Kubeconfig)
-	os.Setenv("FUNC_GO", Go)
-	os.Setenv("FUNC_GIT", Git)
-	os.Setenv("GOCOVERDIR", Gocoverdir)
-	os.Setenv("FUNC_VERBOSE", fmt.Sprintf("%t", Verbose))
+// doMatrixRun implements a specific permutation of the local run matrix test.
+func doMatrixRun(t *testing.T, name, runtime, builder, template string) {
+	t.Helper()
+	_ = fromCleanEnv(t, name)
 
-	// The Registry will be set either during first-time setup using the
-	// global config, or already defaulted by the user via environment variable.
-	os.Setenv("FUNC_REGISTRY", Registry)
+	// Choose an address ahead of time
+	address, err := chooseOpenAddress(t)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// The following host-builder related settings will become the defaults
-	// once the host builder supports the core runtimes.  Setting them here in
-	// order to futureproof individual tests.
-	os.Setenv("FUNC_ENABLE_HOST_BUILDER", "true") // Enable the host builder
-	os.Setenv("FUNC_BUILDER", "host")             // default to host builder
-	os.Setenv("FUNC_CONTAINER", "false")          // "run" uses host builder
+	// func init
+	init := []string{"init", "-l", runtime, "-t", template}
+
+	// func run
+	run := []string{"run", "--builder", builder, "--address", address}
+
+	// Python Special Treatment
+	// --------------------------
+	// Skip Pack builder (not supported)
+	if runtime == "python" && builder == "pack" {
+		t.Skip("Python runtime currently does not support the Pack builder")
+	}
+	// Echo Implementation
+	// Replace the simple "OK" implementation with an echo.
+	//
+	// The Python HTTP template is currently not an "echo" because it's
+	// annoyingly complex, and we want the default template to be as simple
+	// and approachable as possible.  We'll be transitioning to having all
+	// builtin templates to a simple "OK" response for this reason, and using
+	// an external repository for the "echo" implementations currently the
+	// default.  Python HTTP is a bit ahead of this schedule, so use an echo
+	// implementation in ./testdata until then:
+	if runtime == "python" && template == "http" {
+		init = append(init, "--repository", "file://"+filepath.Join(Testdata, "templates"))
+	}
+
+	// Node special treatment
+	// ----------------------
+	// Skip Host builder (not supported)
+	if runtime == "node" && builder == "host" {
+		t.Skip("Node runtime currently does not support the Host builder")
+	}
+	// container required
+	if runtime == "node" {
+		run = append(run, "--container=true")
+	}
+
+	// Initialize
+	// ----------
+	if err := newCmd(t, init...).Run(); err != nil {
+		t.Fatalf("Failed to create %s function with %s template: %v", runtime, template, err)
+	}
+
+	// Run
+	// ---
+	cmd := newCmd(t, run...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the function to be ready, using the appropriate method based on template
+	httpAddress := "http://" + address
+	var ready bool
+	if template == "cloudevents" {
+		ready = waitForCloudevent(t, httpAddress)
+	} else { // default is http:
+		ready = waitForEcho(t, httpAddress)
+	}
+
+	if !ready {
+		t.Fatalf("service does not appear to have started correctly.")
+	}
+
+	// ^C the running function
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		fmt.Fprintf(os.Stderr, "error interrupting. %v", err)
+	}
+
+	// Wait for exit and error if anything other than 130 (^C/interrupt)
+	if err := cmd.Wait(); isAbnormalExit(t, err) {
+		t.Fatalf("funciton exited abnormally %v", err)
+	}
+}
+
+// TestMatrix_Deploy ensures that supported runtimes and builders can deploy
+// builtin templates successfully.
+func TestMatrix_Deploy(t *testing.T) {
+	if !Matrix {
+		t.Skip("Matrix tests not enabled. Enable with FUNC_E2E_MATRIX=true")
+	}
+	for _, runtime := range MatrixRuntimes {
+		for _, builder := range MatrixBuilders {
+			for _, template := range MatrixTemplates {
+				name := fmt.Sprintf("func-e2e-matrix-%s-%s-%s-deploy", runtime, builder, template)
+				t.Run(name, func(t *testing.T) {
+					doMatrixDeploy(t, name, runtime, builder, template)
+				})
+			}
+		}
+	}
+}
+
+// doMatrixDeploy implements a specific permutation of the deploy matrix tests.
+func doMatrixDeploy(t *testing.T, name, runtime, builder, template string) {
+	t.Helper()
+	_ = fromCleanEnv(t, name)
+
+	// Initialize the Function
+	if err := newCmd(t, "init", "-l", runtime, "-t", template).Run(); err != nil {
+		t.Fatalf("Failed to create %s function with %s template: %v", runtime, template, err)
+	}
+
+	if err := newCmd(t, "deploy", "--builder", builder).Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	// Wait for the function to be ready, using the appropriate method based on template
+	functionURL := fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)
+	var ready bool
+	if template == "cloudevents" {
+		ready = waitForCloudevent(t, functionURL)
+	} else {
+		ready = waitForEcho(t, functionURL)
+	}
+
+	if !ready {
+		t.Fatalf("function did not deploy correctly")
+	}
+}
+
+// TestMatrix_Remote ensures that supported runtimes and builders can deploy
+// builtin templates remotely.
+func TestMatrix_Remote(t *testing.T) {
+	if !Matrix {
+		t.Skip("Matrix tests not enabled. Enable with FUNC_E2E_MATRIX=true")
+	}
+	for _, runtime := range MatrixRuntimes {
+		for _, builder := range MatrixBuilders {
+			for _, template := range MatrixTemplates {
+				name := fmt.Sprintf("func-e2e-matrix-%s-%s-%s-remote", runtime, builder, template)
+				t.Run(name, func(t *testing.T) {
+					doMatrixRemote(t, name, runtime, builder, template)
+				})
+			}
+		}
+	}
+}
+
+// doMatrixRemote implements a specific permutation of the remote deploy matrix tests.
+func doMatrixRemote(t *testing.T, name, runtime, builder, template string) {
+	t.Helper()
+	_ = fromCleanEnv(t, name)
+
+	// Initialize the Function
+	if err := newCmd(t, "init", "-l", runtime, "-t", template).Run(); err != nil {
+		t.Fatalf("Failed to create %s function with %s template: %v", runtime, template, err)
+	}
+
+	if err := newCmd(t, "deploy", "--builder", builder, "--remote", "--registry=registry.default.svc.cluster.local:5000/func").Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		clean(t, name, DefaultNamespace)
+	}()
+
+	// Wait for the function to be ready, using the appropriate method based on template
+	functionURL := fmt.Sprintf("http://%v.default.127.0.0.1.sslip.io", name)
+	var ready bool
+	if template == "cloudevents" {
+		ready = waitForCloudevent(t, functionURL)
+	} else {
+		ready = waitForEcho(t, functionURL)
+	}
+
+	if !ready {
+		t.Fatalf("function did not deploy correctly")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+// fromCleanEnv provides a clean environment for a function E2E test.
+func fromCleanEnv(t *testing.T, name string) (root string) {
+	root = cdTemp(t, name)
+	setupHome(t)
+	setupEnv(t)
+	return
 }
 
 // cdTmp changes to a new temporary directory for running the test.
@@ -919,6 +1557,137 @@ func cdTemp(t *testing.T, name string) string {
 		}
 	})
 	return tmp
+}
+
+// setupHome creates
+func setupHome(t *testing.T) {
+	// If Home exists, it was an override from the user and should be
+	// respected. do not mutate
+	if _, err := os.Stat(Home); err == nil {
+		return
+	}
+
+	xdgConfigDir := filepath.Join(Home, ".config")
+	if err := os.MkdirAll(xdgConfigDir, 0755); err != nil {
+		t.Fatalf("failed to create .config directory: %v", err)
+	}
+
+	xdgDataDir := filepath.Join(Home, ".local", "share")
+	if err := os.MkdirAll(xdgDataDir, 0755); err != nil {
+		t.Fatalf("failed to create .local/share directory: %v", err)
+	}
+
+	// If podman is enabled, this will add some links for its metadata
+	if Podman {
+		setupPodmanLinks(t)
+	}
+}
+
+// setupPodmanLinks creates symlinks in the synthetic, isolated home to the
+// actual podman system settings.
+func setupPodmanLinks(t *testing.T) {
+	actualHome, err := os.UserHomeDir()
+	if err != nil {
+		panic(fmt.Sprintf("error determining user home directory. %v", err))
+	}
+	podmanConfigSource := filepath.Join(actualHome, ".config", "containers")
+	podmanDataSource := filepath.Join(actualHome, ".local", "share", "containers")
+
+	if _, err := os.Stat(podmanConfigSource); err == nil {
+		podmanConfigLink := filepath.Join(Home, ".config", "containers")
+		_ = os.Symlink(podmanConfigSource, podmanConfigLink)
+	}
+
+	if _, err := os.Stat(podmanDataSource); err == nil {
+		podmanDataLink := filepath.Join(Home, ".local", "share", "containers")
+		_ = os.Symlink(podmanDataSource, podmanDataLink)
+	}
+}
+
+// setupEnv before running a test to remove all environment variables and
+// set the required environment variables to those specified during
+// initialization.
+//
+// Every test must be run with a nearly completely isolated environment,
+// otherwise a developer's local environment will affect the E2E tests when
+// run locally outside of CI. Some environment variables, provided via
+// FUNC_E2E_* or other settings, are explicitly set here.
+func setupEnv(t *testing.T) {
+	path := Tools + ":" + os.Getenv("PATH")
+
+	os.Clearenv()
+
+	os.Setenv("PATH", path)
+	os.Setenv("HOME", Home)
+	os.Setenv("KUBECONFIG", Kubeconfig)
+	os.Setenv("GOCOVERDIR", Gocoverdir)
+	os.Setenv("FUNC_VERBOSE", fmt.Sprintf("%t", Verbose))
+
+	// The Registry will be set either during first-time setup using the
+	// global config, or already defaulted by the user via environment variable.
+	os.Setenv("FUNC_REGISTRY", Registry)
+
+	// If the docker host is set, it should affect any tests which perform
+	// container operations except for podman-specific tests.  These use
+	// the FUNC_E2E_PODMAN_HOST value during test execution directly.
+	os.Setenv("DOCKER_HOST", DockerHost)
+
+	// The following host-builder related settings will become the defaults
+	// once the host builder supports the core runtimes.  Setting them here in
+	// order to futureproof individual tests.
+	os.Setenv("FUNC_ENABLE_HOST_BUILDER", "true") // Enable the host builder
+	os.Setenv("FUNC_BUILDER", "host")             // default to host builder
+	os.Setenv("FUNC_CONTAINER", "false")          // "run" uses host builder
+}
+
+// setupPodmanEnvs
+// - configures VM to treat localhost:50000 as an insecure registry
+// - proxy connections to the host if running in a VM (like on darwin)
+// - creates an XDG_CONFIG_HOME and XDG_DATA_HOME
+func setupPodman(t *testing.T) error {
+	t.Helper()
+
+	os.Setenv("DOCKER_HOST", PodmanHost)
+
+	cfg := `
+[[registry]]
+location="localhost:50000"
+insecure=true
+`
+	cfgPath := filepath.Join(t.TempDir(), "registries.conf")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0644); err != nil {
+		return fmt.Errorf("failed to create registries.conf: %v", err)
+	}
+	os.Setenv("CONTAINERS_REGISTRIES_CONF", cfgPath)
+
+	// List available machines (debug)
+	t.Log("Available Podman Machines:")
+	listCmd := exec.Command("podman", "machine", "list")
+	output, err := listCmd.CombinedOutput()
+	if err != nil {
+		return err
+	}
+	t.Logf("output: %s", output)
+
+	// Kill any existing process on port 50000 in the Podman VM
+	killCmd := exec.Command("podman", "machine", "ssh", "--",
+		"sudo lsof -ti :50000 | sudo xargs kill -9 2>/dev/null || true")
+	if output, err = killCmd.CombinedOutput(); err != nil {
+		t.Logf("output: %s", output)
+		return fmt.Errorf("failed killing existing registry proxy: %v", err)
+	}
+
+	// Set up socat proxy to forward localhost:50000 to host.containers.internal:50000
+	// This allows containers in Podman to access the host's registry
+	proxyCmd := exec.Command("podman", "machine", "ssh", "--",
+		"sudo sh -c 'socat TCP-LISTEN:50000,fork,reuseaddr TCP:host.containers.internal:50000 </dev/null >/dev/null 2>&1 & echo Registry proxy started'")
+	if output, err = proxyCmd.CombinedOutput(); err != nil {
+		t.Logf("output: %s", output)
+		return fmt.Errorf("failed to set up registry proxy: %v, output: %s", err, output)
+	}
+	t.Logf("Podman registry proxy enabled: %s", strings.TrimSpace(string(output)))
+
+	return nil
 }
 
 // newCmd returns an *exec.Cmd
@@ -960,8 +1729,86 @@ func newCmd(t *testing.T, args ...string) *exec.Cmd {
 	// return stdout.String()
 }
 
-// waitFor returns true if there is service at the given addresss which
+// waitForEcho returns true if there is service at the given addresss which
 // echoes back the request arguments given.
+func waitForEcho(t *testing.T, address string) (ok bool) {
+
+	return waitFor(t, address+"?test-echo-param", "test-echo-param", "does not appear to be an echo")
+}
+
+// waitForCloudevent returns true if there is a service at the given address
+// which accepts CloudEvents and responds with HTTP 200 when given a cloudevent
+func waitForCloudevent(t *testing.T, address string) (ok bool) {
+	t.Helper()
+	var (
+		retries       = 50 // Set high for slow environments (CI)
+		warnThreshold = 30 // start warning after 30
+		warnModulo    = 5  // but only warn every 5 attempts
+		delay         = 500 * time.Millisecond
+	)
+
+	// Prepare CloudEvent headers
+	req, err := http.NewRequest("POST", address, strings.NewReader(`{"message": "test"}`))
+	if err != nil {
+		t.Fatalf("error creating request: %v", err)
+		return false
+	}
+
+	// Set CloudEvents headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Ce-Id", "test-event-1")
+	req.Header.Set("Ce-Type", "test.event.type")
+	req.Header.Set("Ce-Source", "e2e-test")
+	req.Header.Set("Ce-Specversion", "1.0")
+
+	client := &http.Client{}
+
+	for i := 0; i < retries; i++ {
+		time.Sleep(delay)
+		t.Logf("POST %v (CloudEvent)\n", address)
+
+		res, err := client.Do(req)
+		if err != nil {
+			if i > warnThreshold && i%warnModulo == 0 {
+				t.Logf("unable to contact function (attempt %v/%v). %v", i, retries, err)
+			}
+			continue
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode == 200 {
+			// CloudEvents function is responding correctly
+			return true
+		}
+
+		if res.StatusCode == 500 {
+			body, _ := io.ReadAll(res.Body)
+			t.Log("500 response received; canceling retries.")
+			t.Logf("Response: %s\n", body)
+			return false
+		}
+
+		if i > warnThreshold && i%warnModulo == 0 {
+			t.Logf("Function responded with status %d (attempt %v/%v)", res.StatusCode, i, retries)
+		}
+	}
+
+	t.Logf("Could not validate CloudEvents function after %v tries", retries)
+	return false
+}
+
+// waitForContent returns true if there is a service listening at the
+// given addresss which responds HTTP OK with the given string in its body.
+// returns false if the.
+func waitForContent(t *testing.T, address, content string) (ok bool) {
+	return waitFor(t, address, content, "expected content not found")
+}
+
+// waitFor an endpoint to return an OK response which includes the given
+// content.
+//
+// If the Function returns a 500, it is considered a positive test failure
+// by the implementation and retries are discontinued.
 //
 // TODO:  Implement a --output=json flag on `func run` and update all
 // callers currently passing localhost:8080 with this calculated value.
@@ -975,51 +1822,19 @@ func newCmd(t *testing.T, args ...string) *exec.Cmd {
 // currently executing a `func run`
 // Note that until this is implemented, this temporary implementation also
 // forces single-threaded test execution.
-func waitFor(t *testing.T, address string) (ok bool) {
+func waitFor(t *testing.T, address, content, errMsg string) (ok bool) {
 	t.Helper()
-	retries := 50       // Set fairly high for slow environments such as free-tier CI
-	warnThreshold := 30 // start warning after 30
-	warnModulo := 5     // but only warn every 5 attemtps
-	delay := 500 * time.Millisecond
+	var (
+		retries          = 50    // Set high for slow environments (CI)
+		warnThreshold    = 30    // start warning after 30
+		warnModulo       = 5     // but only warn every 5 attemtps
+		mismatchLast     = ""    // cache the last content for squelching purposes.
+		mismatchReported = false // note that the given content was reported
+		delay            = 500 * time.Millisecond
+	)
 	for i := 0; i < retries; i++ {
 		time.Sleep(delay)
-		res, err := http.Get(address + "?test-echo-param")
-		if err != nil {
-			if i > warnThreshold && i%warnModulo == 0 {
-				t.Logf("unable to contact function (attempt %v/%v). %v", i, retries, err)
-			}
-			continue
-		}
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			t.Logf("error reading function response. %v", err)
-			continue
-		}
-		defer res.Body.Close()
-		if strings.Contains(string(body), "test-echo-param") {
-			t.Log("Response received, but it does not appear to be an echo.")
-			t.Logf("Response: %s\n", body)
-			continue
-		}
-		return true
-	}
-	t.Logf("Could not contact function after %v tries", retries)
-	return
-}
-
-// waitForContent returns true if there is a service listening at the
-// given addresss which responds HTTP OK with the given string in its body.
-// returns false if the.
-// If the Function returns a 500, it is considered a positive test failure
-// by the implementation and retries are discontinued.
-func waitForContent(t *testing.T, address, content string) (ok bool) {
-	t.Helper()
-	retries := 50       // Set fairly high for slow environments such as free-tier CI
-	warnThreshold := 30 // start warning after 30
-	warnModulo := 5     // but only warn every 5 attemtps
-	delay := 500 * time.Millisecond
-	for i := 0; i < retries; i++ {
-		time.Sleep(delay)
+		t.Logf("GET %v\n", address)
 		res, err := http.Get(address)
 		if err != nil {
 			if i > warnThreshold && i%warnModulo == 0 {
@@ -1039,20 +1854,29 @@ func waitForContent(t *testing.T, address, content string) (ok bool) {
 			return false
 		}
 		if !strings.Contains(string(body), content) {
-			t.Log("Response received, but it did not contain the expected content.")
-			t.Logf("Response: %s\n", body)
+			if string(body) != mismatchLast || !mismatchReported {
+				if errMsg == "" {
+					errMsg = "expected content not found"
+				}
+				t.Log("Response received, but " + errMsg)
+				t.Logf("Response: %s\n", body)
+				mismatchLast = string(body)
+				mismatchReported = true
+			}
 			continue
 		}
 		return true
 	}
-	t.Logf("Could not validate function returns expected content after %v tries", retries)
+	t.Logf("Could not validate function after %v tries", retries)
 	return
 }
 
-// isAbnormalExit checks an erro returned from a cmd.Wait and returns true
-// Removed
+// isAbnormalExit checks an error returned from a cmd.Wait and returns true
 // if the error is something other than a known exit 130 from a SIGINT.
 func isAbnormalExit(t *testing.T, err error) bool {
+	if err == nil {
+		return false // no error is not an abnormal error.
+	}
 	t.Helper()
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		exitCode := exitErr.ExitCode()
@@ -1113,12 +1937,24 @@ func setConfigMap(t *testing.T, name, ns string, data map[string]string) {
 	}
 }
 
+// containsInstance checks if the list includes the given instance.
+func containsInstance(t *testing.T, list []fn.ListItem, name, namespace string) bool {
+	t.Helper()
+	for _, v := range list {
+		if v.Name == name && v.Namespace == namespace {
+			return true
+		}
+	}
+	return false
+}
+
 func clean(t *testing.T, name, ns string) {
 	// There is currently a bug in delete which hangs for several seconds
 	// when deleting a Function. This adds considerably to the test suite
 	// execution time.  Tests are written such that they are not dependent
 	// on a clean exit/cleanup, so this step is skipped for speed.
 	if Clean {
+		return
 		if err := newCmd(t, "delete", name, "--namespace", ns).Run(); err != nil {
 			t.Logf("Error deleting function. %v", err)
 		}
@@ -1128,19 +1964,14 @@ func clean(t *testing.T, name, ns string) {
 // ----------------------------------------------------------------------------
 // Test Initialization
 // ----------------------------------------------------------------------------
-// Deprecated ENV       Current ENV                   Final Variable
+//
+// NOTE: Deprecated     New ENV                       Final Variable
 // ---------------------------------------------------
 // E2E_FUNC_BIN      => FUNC_E2E_BIN               => Bin
 // E2E_USE_KN_FUNC   => FUNC_E2E_PLUGIN            => Plugin
 // E2E_REGISTRY_URL  => FUNC_E2E_REGISTRY          => Registry
 // E2E_RUNTIMES      => FUNC_E2E_MATRIX_RUNTIMES   => MatrixRuntimes
-//                      FUNC_E2E_MATRIX_BUILDERS   => MatrixBuilders
-//                      FUNC_E2E_MATRIX            => Matrix
-//                      FUNC_E2E_KUBECONFIG        => Kubeconfig
-//                      FUNC_E2E_GOCOVERDIR        => Gocoverdir
-//                      FUNC_E2E_GO                => Go
-//                      FUNC_E2E_GIT               => Git
-
+//
 // init global settings for the current run from environment
 // we read E2E config settings passed via the FUNC_E2E_* environment
 // variables.  These globals are used when creating test cases.
@@ -1149,40 +1980,51 @@ func clean(t *testing.T, name, ns string) {
 // into each test, merely reading them in here during E2E process init.
 func init() {
 	fmt.Fprintln(os.Stderr, "Initializing E2E Tests")
-
 	fmt.Fprintln(os.Stderr, "----------------------")
 	fmt.Fprintln(os.Stderr, "Config Provided:")
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_BIN=%v\n", os.Getenv("FUNC_E2E_BIN"))
-	fmt.Fprintf(os.Stderr, "  FUNC_E2E_GIT=%v\n", os.Getenv("FUNC_E2E_GIT"))
-	fmt.Fprintf(os.Stderr, "  FUNC_E2E_GO=%v\n", os.Getenv("FUNC_E2E_GO"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_CLEAN=%v\n", os.Getenv("FUNC_E2E_CLEAN"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_DOCKER_HOST=%v\n", os.Getenv("FUNC_E2E_DOCKER_HOST"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_GOCOVERDIR=%v\n", os.Getenv("FUNC_E2E_GOCOVERDIR"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_HOME=%v\n", os.Getenv("FUNC_E2E_HOME"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_KUBECONFIG=%v\n", os.Getenv("FUNC_E2E_KUBECONFIG"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_MATRIX=%v\n", os.Getenv("FUNC_E2E_MATRIX"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_MATRIX_BUILDERS=%v\n", os.Getenv("FUNC_E2E_MATRIX_BUILDERS"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_MATRIX_RUNTIMES=%v\n", os.Getenv("FUNC_E2E_MATRIX_RUNTIMES"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_PLUGIN=%v\n", os.Getenv("FUNC_E2E_PLUGIN"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_PODMAN_HOST=%v\n", os.Getenv("FUNC_E2E_PODMAN_HOST"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_REGISTRY=%v\n", os.Getenv("FUNC_E2E_REGISTRY"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_PODMAN=%v\n", os.Getenv("FUNC_E2E_PODMAN"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_TOOLS=%v\n", os.Getenv("FUNC_E2E_TOOLS"))
+	fmt.Fprintf(os.Stderr, "  FUNC_E2E_TESTDATA=%v\n", os.Getenv("FUNC_E2E_TESTDATA"))
 	fmt.Fprintf(os.Stderr, "  FUNC_E2E_VERBOSE=%v\n", os.Getenv("FUNC_E2E_VERBOSE"))
-	fmt.Fprintf(os.Stderr, "  FUNC_E2E_CLEAN=%v\n", os.Getenv("FUNC_E2E_CLEAN"))
 	fmt.Fprintf(os.Stderr, "  (deprecated) E2E_FUNC_BIN=%v\n", os.Getenv("E2E_FUNC_BIN"))
 	fmt.Fprintf(os.Stderr, "  (deprecated) E2E_REGISTRY_URL=%v\n", os.Getenv("E2E_REGISTRY_URL"))
 	fmt.Fprintf(os.Stderr, "  (deprecated) E2E_RUNTIMES=%v\n", os.Getenv("E2E_RUNTIMES"))
 	fmt.Fprintf(os.Stderr, "  (deprecated) E2E_USE_KN_FUNC=%v\n", os.Getenv("E2E_USE_KN_FUNC"))
 
 	fmt.Fprintln(os.Stderr, "---------------------")
-	// Read them all into their final variables
+
+	// Read all envs into their final variables
 	readEnvs()
 
 	fmt.Fprintln(os.Stderr, "Final Config:")
 	fmt.Fprintf(os.Stderr, "  Bin=%v\n", Bin)
-	fmt.Fprintf(os.Stderr, "  Git=%v\n", Git)
-	fmt.Fprintf(os.Stderr, "  Go=%v\n", Go)
+	fmt.Fprintf(os.Stderr, "  Clean=%v\n", Clean)
+	fmt.Fprintf(os.Stderr, "  DockerHost=%v\n", DockerHost)
+	fmt.Fprintf(os.Stderr, "  Gocoverdir=%v\n", Gocoverdir)
+	fmt.Fprintf(os.Stderr, "  Home=%v\n", Home)
 	fmt.Fprintf(os.Stderr, "  Kubeconfig=%v\n", Kubeconfig)
 	fmt.Fprintf(os.Stderr, "  Matrix=%v\n", Matrix)
 	fmt.Fprintf(os.Stderr, "  MatrixBuilders=%v\n", toCSV(MatrixBuilders))
 	fmt.Fprintf(os.Stderr, "  MatrixRuntimes=%v\n", toCSV(MatrixRuntimes))
+	fmt.Fprintf(os.Stderr, "  MatrixTemplates=%v\n", toCSV(MatrixTemplates))
 	fmt.Fprintf(os.Stderr, "  Plugin=%v\n", Plugin)
+	fmt.Fprintf(os.Stderr, "  PodmanHost=%v\n", PodmanHost)
 	fmt.Fprintf(os.Stderr, "  Registry=%v\n", Registry)
+	fmt.Fprintf(os.Stderr, "  Podman=%v\n", Podman)
+	fmt.Fprintf(os.Stderr, "  Tools=%v\n", Tools)
+	fmt.Fprintf(os.Stderr, "  Testdata=%v\n", Testdata)
 	fmt.Fprintf(os.Stderr, "  Verbose=%v\n", Verbose)
 
 	// Coverage
@@ -1206,56 +2048,69 @@ func readEnvs() {
 	Bin = getEnvPath("FUNC_E2E_BIN", "E2E_FUNC_BIN", DefaultBin)
 	// Final =          current ENV, deprecated ENV, default
 
-	// Plugin - if set, func is a plugin and Bin is the one plugging. The value
-	// is the name of the subcommand.  If set to "true", for backwards compat
-	// the default value is "func"
-	Plugin = getEnv("FUNC_E2E_PLUGIN", "E2E_USE_KN_FUNC", "")
-	if Plugin == "true" { // backwards compatibility
-		Plugin = "func" // deprecated value was literal string "true"
-	}
+	// Clean up deployed functions before starting next test
+	Clean = getEnvBool("FUNC_E2E_CLEAN", "", DefaultClean)
 
-	// Registry - the registry URL including any account/repository at that
-	// registry.  Example:  docker.io/alice.  Default is the local registry.
-	Registry = getEnv("FUNC_E2E_REGISTRY", "E2E_REGISTRY_URL", DefaultRegistry)
+	// DockerHost - the DOCKER_HOST to use for container operations (not including podman-specific tests)
+	DockerHost = getEnv("FUNC_E2E_DOCKER_HOST", "", "")
+
+	// Gocoverdir - the coverage directory to use while testing the go binary.
+	Gocoverdir = getEnvPath("FUNC_E2E_GOCOVERDIR", "", DefaultGocoverdir)
+
+	// Home is an optional setting which defines the home directory to use
+	// when running tests.  By default a temporary directory is created for
+	// each test on-demand.  Use this setting for debugging, but be aware
+	// that, if defined, all tests run during the given invocation will use
+	// this home.
+	Home = getEnvPath("FUNC_E2E_HOME", "", DefaultHome)
+
+	// Kubeconfig - the kubeconfig to pass ass KUBECONFIG env to test
+	// environments.
+	Kubeconfig = getEnvPath("FUNC_E2E_KUBECONFIG", "", DefaultKubeconfig)
 
 	// Matrix - optionally enable matrix test
-	Verbose = getEnvBool("FUNC_E2E_MATRIX", "", false)
+	Matrix = getEnvBool("FUNC_E2E_MATRIX", "", false)
+
+	// Builders - can optionally pass a list of builders to test, overriding
+	// the default of testing all. Example "FUNC_E2E_MATRIX_BUILDERS=pack,s2i"
+	MatrixBuilders = getEnvList("FUNC_E2E_MATRIX_BUILDERS", "", toCSV(MatrixBuilders))
 
 	// Runtimes - can optionally pass a list of runtimes to test, overriding
 	// the default of testing all builtin runtimes.
 	// Example "FUNC_E2E_MATRIX_RUNTIMES=go,python"
 	MatrixRuntimes = getEnvList("FUNC_E2E_MATRIX_RUNTIMES", "E2E_RUNTIMES", toCSV(MatrixRuntimes))
 
-	// Builders - can optionally pass a list of builders to test, overriding
-	// the default of testing all. Example "FUNC_E2E_MATRIX_BUILDERS=pack,s2i"
-	MatrixBuilders = getEnvList("FUNC_E2E_MATRIX_BUILDERS", "", toCSV(MatrixBuilders))
+	// Templates
+	MatrixTemplates = getEnvList("FUNC_E2E_MATRIX_TEMPLATES", "", toCSV(MatrixTemplates))
 
-	// Kubeconfig - the kubeconfig to pass ass KUBECONFIG env to test
-	// environments.
-	Kubeconfig = getEnvPath("FUNC_E2E_KUBECONFIG", "", DefaultKubeconfig)
+	// Plugin - if set, func is a plugin and Bin is the one plugging. The value
+	// is the name of the subcommand.
+	Plugin = getEnv("FUNC_E2E_PLUGIN", "E2E_USE_KN_FUNC", "")
+	// Plugin Backwards compatibility:
+	// If set to "true", the default value is "func" because the deprecated
+	// value was literal string "true".
+	if Plugin == "true" {
+		Plugin = "func"
+	}
 
-	// Gocoverdir - the coverage directory to use while testing the go binary.
-	Gocoverdir = getEnvPath("FUNC_E2E_GOCOVERDIR", "", DefaultGocoverdir)
+	// PodmanHost - the DOCKER_HOST to use specifically during Podman tests
+	PodmanHost = getEnv("FUNC_E2E_PODMAN_HOST", "", "")
 
-	// Go binary path
-	Go = getEnvBin("FUNC_E2E_GO", "", "go")
+	// Registry - the registry URL including any account/repository at that
+	// registry.  Example:  docker.io/alice.  Default is the local registry.
+	Registry = getEnv("FUNC_E2E_REGISTRY", "E2E_REGISTRY_URL", DefaultRegistry)
 
-	// Git binary path
-	Git = getEnvBin("FUNC_E2E_GIT", "", "git")
-
-	// Clean up deployed functions before starting next test
-	Clean = getEnvBool("FUNC_E2E_CLEAN", "", false)
+	// Podman - optionally enable Podman S2I and Builder test
+	Podman = getEnvBool("FUNC_E2E_PODMAN", "", false)
 
 	// Verbose env as a truthy boolean
 	Verbose = getEnvBool("FUNC_E2E_VERBOSE", "", DefaultVerbose)
 
-	// Home is a bit of a special case.  It is the default home directory, is
-	// not configurable (tests override it on a case-by-case basis) and is
-	// merely set here to the absolute path of DefaultHome
-	var err error
-	if Home, err = filepath.Abs(DefaultHome); err != nil {
-		panic(fmt.Sprintf("error converting the relative default home value to absolute. %v", err))
-	}
+	// Tools - the path to supporting tools.
+	Tools = getEnvPath("FUNC_E2E_TOOLS", "", DefaultTools)
+
+	// Testdata - the path to supporting testdata
+	Testdata = getEnvPath("FUNC_E2E_TESTDATA", "", DefaultTestdata)
 }
 
 // getEnvPath converts the value returned from getEnv to an absolute path.
@@ -1347,4 +2202,32 @@ func fromCSV(s string) (result []string) {
 
 func toCSV(ss []string) string {
 	return strings.Join(ss, ",")
+}
+
+// chooseOpenAddress for use with things like running local functions.
+// Always uses the looback interface; OS-chosen port.
+func chooseOpenAddress(t *testing.T) (address string, err error) {
+	t.Helper()
+	var l net.Listener
+	if l, err = net.Listen("tcp", "127.0.0.1:"); err != nil {
+		return "", fmt.Errorf("cannot bind tcp: %w", err)
+	}
+	defer l.Close()
+	return l.Addr().String(), nil
+}
+
+// expandPath attempts to expand the path if relative.
+// fails soft.
+func expandPath(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		// nonfatal.  Let the test which uses the test report the
+		// appropos failure at that time.
+		fmt.Fprintf(os.Stderr, "error: expanding user homedir failed. %v", err)
+		return path
+	}
+	return filepath.Join(homeDir, path[2:])
 }
