@@ -55,11 +55,6 @@ const (
 	// likewise also isolated using the "FUNC_E2E_" prefix.
 	DefaultGocoverdir = "../.coverage"
 
-	// DefaultHome is defined as the .func_e2e_home directory within the
-	// clean environment (temp directory) created for each test.  This can
-	// be overridden with FUNC_E2E_HOME.
-	DefaultHome = ".func_e2e_home"
-
 	// DefaultKubeconfig is the default path (relative to this test file) at
 	// which the kubeconfig can be found which was created when setting up
 	// a local test cluster using the allocate.sh script.  This can be
@@ -106,10 +101,6 @@ var (
 	// is set to ../.coverage (as relative to this test file).  This value
 	// can be overridden with FUNC_E2E_GOCOVERDIR.
 	Gocoverdir string
-
-	// Home is the final path to the Home used when running tests ($HOME)
-	// can be overridden with FUNC_E2E_HOME
-	Home string
 
 	// Kubeconfig is the path at which a kubeconfig suitable for running
 	// E2E tests can be found.  By default the config located in
@@ -786,13 +777,14 @@ func TestMetadata_Labels_Add(t *testing.T) {
 	// Use the output from "func describe" (json output) to verify the
 	// function contains the both the test labels as expected.
 	cmd := newCmd(t, "describe", name, "--output=json", "--namespace", DefaultNamespace)
-	out, err := cmd.Output()
-	if err != nil {
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
 
 	var instance fn.Instance
-	if err := json.Unmarshal(out, &instance); err != nil {
+	if err := json.Unmarshal(out.Bytes(), &instance); err != nil {
 		t.Fatalf("error unmarshaling describe output: %v", err)
 	}
 	if instance.Labels == nil {
@@ -835,12 +827,13 @@ func TestMetadata_Labels_Remove(t *testing.T) {
 
 	// Verify the labels were applied
 	cmd := newCmd(t, "describe", name, "--output=json", "--namespace", DefaultNamespace)
-	out, err := cmd.Output()
-	if err != nil {
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
 	var desc fn.Instance
-	if err := json.Unmarshal(out, &desc); err != nil {
+	if err := json.Unmarshal(out.Bytes(), &desc); err != nil {
 		t.Fatalf("error unmarshaling describe output: %v", err)
 	}
 	if desc.Labels == nil {
@@ -866,13 +859,14 @@ func TestMetadata_Labels_Remove(t *testing.T) {
 
 	// Verify the function no longer includes the removed label.
 	cmd = newCmd(t, "describe", "--output=json")
-	out, err = cmd.Output()
-	if err != nil {
+	out = bytes.Buffer{}
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
 
 	var desc2 fn.Instance
-	if err := json.Unmarshal(out, &desc2); err != nil {
+	if err := json.Unmarshal(out.Bytes(), &desc2); err != nil {
 		t.Fatalf("error unmarshaling describe output: %v", err)
 	}
 	if _, ok := desc2.Labels["foo"]; !ok {
@@ -1526,7 +1520,8 @@ func doMatrixRemote(t *testing.T, name, runtime, builder, template string) {
 // fromCleanEnv provides a clean environment for a function E2E test.
 func fromCleanEnv(t *testing.T, name string) (root string) {
 	root = cdTemp(t, name)
-	setupHome(t)
+	// Deprecated?  We're allowing HOME to stay set for now:
+	// setupHome(t)
 	setupEnv(t)
 	return
 }
@@ -1559,20 +1554,17 @@ func cdTemp(t *testing.T, name string) string {
 	return tmp
 }
 
-// setupHome creates
-func setupHome(t *testing.T) {
-	// If Home exists, it was an override from the user and should be
-	// respected. do not mutate
-	if _, err := os.Stat(Home); err == nil {
-		return
-	}
+var HomeRelPath = ".func_e2e_home"
 
-	xdgConfigDir := filepath.Join(Home, ".config")
+// setupHome
+func setupHome(t *testing.T) {
+
+	xdgConfigDir := filepath.Join(HomeRelPath, ".config")
 	if err := os.MkdirAll(xdgConfigDir, 0755); err != nil {
 		t.Fatalf("failed to create .config directory: %v", err)
 	}
 
-	xdgDataDir := filepath.Join(Home, ".local", "share")
+	xdgDataDir := filepath.Join(HomeRelPath, ".local", "share")
 	if err := os.MkdirAll(xdgDataDir, 0755); err != nil {
 		t.Fatalf("failed to create .local/share directory: %v", err)
 	}
@@ -1594,12 +1586,12 @@ func setupPodmanLinks(t *testing.T) {
 	podmanDataSource := filepath.Join(actualHome, ".local", "share", "containers")
 
 	if _, err := os.Stat(podmanConfigSource); err == nil {
-		podmanConfigLink := filepath.Join(Home, ".config", "containers")
+		podmanConfigLink := filepath.Join(HomeRelPath, ".config", "containers")
 		_ = os.Symlink(podmanConfigSource, podmanConfigLink)
 	}
 
 	if _, err := os.Stat(podmanDataSource); err == nil {
-		podmanDataLink := filepath.Join(Home, ".local", "share", "containers")
+		podmanDataLink := filepath.Join(HomeRelPath, ".local", "share", "containers")
 		_ = os.Symlink(podmanDataSource, podmanDataLink)
 	}
 }
@@ -1613,12 +1605,16 @@ func setupPodmanLinks(t *testing.T) {
 // run locally outside of CI. Some environment variables, provided via
 // FUNC_E2E_* or other settings, are explicitly set here.
 func setupEnv(t *testing.T) {
+	// Keep HOME
+	home := os.Getenv("HOME")
+
+	// Keep PATH, but prepend the path to the tools installed with
 	path := Tools + ":" + os.Getenv("PATH")
 
 	os.Clearenv()
 
 	os.Setenv("PATH", path)
-	os.Setenv("HOME", Home)
+	os.Setenv("HOME", home)
 	os.Setenv("KUBECONFIG", Kubeconfig)
 	os.Setenv("GOCOVERDIR", Gocoverdir)
 	os.Setenv("FUNC_VERBOSE", fmt.Sprintf("%t", Verbose))
@@ -1954,7 +1950,6 @@ func clean(t *testing.T, name, ns string) {
 	// execution time.  Tests are written such that they are not dependent
 	// on a clean exit/cleanup, so this step is skipped for speed.
 	if Clean {
-		return
 		if err := newCmd(t, "delete", name, "--namespace", ns).Run(); err != nil {
 			t.Logf("Error deleting function. %v", err)
 		}
@@ -2013,7 +2008,6 @@ func init() {
 	fmt.Fprintf(os.Stderr, "  Clean=%v\n", Clean)
 	fmt.Fprintf(os.Stderr, "  DockerHost=%v\n", DockerHost)
 	fmt.Fprintf(os.Stderr, "  Gocoverdir=%v\n", Gocoverdir)
-	fmt.Fprintf(os.Stderr, "  Home=%v\n", Home)
 	fmt.Fprintf(os.Stderr, "  Kubeconfig=%v\n", Kubeconfig)
 	fmt.Fprintf(os.Stderr, "  Matrix=%v\n", Matrix)
 	fmt.Fprintf(os.Stderr, "  MatrixBuilders=%v\n", toCSV(MatrixBuilders))
@@ -2056,13 +2050,6 @@ func readEnvs() {
 
 	// Gocoverdir - the coverage directory to use while testing the go binary.
 	Gocoverdir = getEnvPath("FUNC_E2E_GOCOVERDIR", "", DefaultGocoverdir)
-
-	// Home is an optional setting which defines the home directory to use
-	// when running tests.  By default a temporary directory is created for
-	// each test on-demand.  Use this setting for debugging, but be aware
-	// that, if defined, all tests run during the given invocation will use
-	// this home.
-	Home = getEnvPath("FUNC_E2E_HOME", "", DefaultHome)
 
 	// Kubeconfig - the kubeconfig to pass ass KUBECONFIG env to test
 	// environments.
