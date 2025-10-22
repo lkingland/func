@@ -12,15 +12,27 @@ var TEMPLATE_RESOURCE_URIS = []string{
 }
 
 type MCPServer struct {
-	server *server.MCPServer
+	server     *server.MCPServer
+	cmdPrefix  string // Command prefix to use (e.g., "func" or "kn func")
 }
 
-func NewServer() *MCPServer {
+func NewServer(cmdPrefix string) *MCPServer {
+	// Default to "func" if no prefix provided
+	if cmdPrefix == "" {
+		cmdPrefix = "func"
+	}
+
 	mcpServer := server.NewMCPServer(
 		"func-mcp",
 		"1.0.0",
 		server.WithToolCapabilities(true),
 	)
+
+	// Create an MCPServer instance to capture cmdPrefix
+	s := &MCPServer{
+		server:    mcpServer,
+		cmdPrefix: cmdPrefix,
+	}
 
 	mcpServer.AddTool(
 		mcp.NewTool("healthcheck",
@@ -51,7 +63,9 @@ func NewServer() *MCPServer {
 			mcp.WithBoolean("confirm", mcp.Description("Prompt to confirm options interactively")),
 			mcp.WithBoolean("verbose", mcp.Description("Print verbose logs")),
 		),
-		handleCreateTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleCreateTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -92,7 +106,9 @@ func NewServer() *MCPServer {
 			mcp.WithBoolean("build-timestamp", mcp.Description("Use actual time in image metadata")),
 			mcp.WithBoolean("remote", mcp.Description("Trigger remote deployment")),
 		),
-		handleDeployTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleDeployTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -105,7 +121,9 @@ func NewServer() *MCPServer {
 			mcp.WithString("output", mcp.Description("Output format: human, plain, json, xml, yaml")),
 			mcp.WithBoolean("verbose", mcp.Description("Enable verbose output")),
 		),
-		handleListTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleListTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -136,7 +154,9 @@ func NewServer() *MCPServer {
 			mcp.WithBoolean("registry-insecure", mcp.Description("Skip TLS verification for insecure registries")),
 			mcp.WithBoolean("build-timestamp", mcp.Description("Use actual time for image timestamp (buildpacks only)")),
 		),
-		handleBuildTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleBuildTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -155,7 +175,9 @@ func NewServer() *MCPServer {
 			mcp.WithBoolean("confirm", mcp.Description("Prompt to confirm before deletion")),
 			mcp.WithBoolean("verbose", mcp.Description("Enable verbose output")),
 		),
-		handleDeleteTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleDeleteTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -179,7 +201,9 @@ func NewServer() *MCPServer {
 			mcp.WithBoolean("read_only", mcp.Description("Mount volume as read-only (only for PVC)")),
 			mcp.WithBoolean("verbose", mcp.Description("Print verbose logs ($FUNC_VERBOSE)")),
 		),
-		handleConfigVolumesTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleConfigVolumesTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -199,7 +223,9 @@ func NewServer() *MCPServer {
 			mcp.WithString("value", mcp.Description("Value of the label.")),
 			mcp.WithBoolean("verbose", mcp.Description("Print verbose logs ($FUNC_VERBOSE)")),
 		),
-		handleConfigLabelsTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleConfigLabelsTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddTool(
@@ -219,7 +245,9 @@ func NewServer() *MCPServer {
 			mcp.WithString("value", mcp.Description("Value of the environment variable.")),
 			mcp.WithBoolean("verbose", mcp.Description("Print verbose logs ($FUNC_VERBOSE)")),
 		),
-		handleConfigEnvsTool,
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleConfigEnvsTool(ctx, request, s.cmdPrefix)
+		},
 	)
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -227,7 +255,9 @@ func NewServer() *MCPServer {
 		"Root Help Command",
 		mcp.WithResourceDescription("--help output of the func command"),
 		mcp.WithMIMEType("text/plain"),
-	), handleRootHelpResource)
+	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		return handleRootHelpResource(ctx, request, s.cmdPrefix)
+	})
 
 	// Static help resources for each command
 	mcpServer.AddResource(mcp.NewResource(
@@ -236,7 +266,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'create' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"create"}, "func://create/docs")
+		return runHelpCommand([]string{"create"}, "func://create/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -245,7 +275,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'build' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"build"}, "func://build/docs")
+		return runHelpCommand([]string{"build"}, "func://build/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -254,7 +284,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'deploy' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"deploy"}, "func://deploy/docs")
+		return runHelpCommand([]string{"deploy"}, "func://deploy/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -263,7 +293,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'list' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"list"}, "func://list/docs")
+		return runHelpCommand([]string{"list"}, "func://list/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -272,7 +302,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'delete' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"delete"}, "func://delete/docs")
+		return runHelpCommand([]string{"delete"}, "func://delete/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -281,7 +311,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'config volumes add' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "volumes", "add"}, "func://config/volumes/add/docs")
+		return runHelpCommand([]string{"config", "volumes", "add"}, "func://config/volumes/add/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -290,7 +320,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'config volumes remove' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "volumes", "remove"}, "func://config/volumes/remove/docs")
+		return runHelpCommand([]string{"config", "volumes", "remove"}, "func://config/volumes/remove/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -299,7 +329,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'config labels add' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "labels", "add"}, "func://config/labels/add/docs")
+		return runHelpCommand([]string{"config", "labels", "add"}, "func://config/labels/add/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -308,7 +338,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'config labels remove' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "labels", "remove"}, "func://config/labels/remove/docs")
+		return runHelpCommand([]string{"config", "labels", "remove"}, "func://config/labels/remove/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -317,7 +347,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'config envs add' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "envs", "add"}, "func://config/envs/add/docs")
+		return runHelpCommand([]string{"config", "envs", "add"}, "func://config/envs/add/docs", s.cmdPrefix)
 	})
 
 	mcpServer.AddResource(mcp.NewResource(
@@ -326,7 +356,7 @@ func NewServer() *MCPServer {
 		mcp.WithResourceDescription("--help output of the 'config envs remove' command"),
 		mcp.WithMIMEType("text/plain"),
 	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "envs", "remove"}, "func://config/envs/remove/docs")
+		return runHelpCommand([]string{"config", "envs", "remove"}, "func://config/envs/remove/docs", s.cmdPrefix)
 	})
 
 	// Static resource for listing available templates
@@ -339,7 +369,9 @@ func NewServer() *MCPServer {
 
 	mcpServer.AddPrompt(mcp.NewPrompt("help",
 		mcp.WithPromptDescription("help prompt for the root command"),
-	), handleRootHelpPrompt)
+	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return handleRootHelpPrompt(ctx, request, s.cmdPrefix)
+	})
 
 	mcpServer.AddPrompt(mcp.NewPrompt("cmd_help",
 		mcp.WithPromptDescription("help prompt for a specific command"),
@@ -347,15 +379,15 @@ func NewServer() *MCPServer {
 			mcp.ArgumentDescription("The command for which help is requested"),
 			mcp.RequiredArgument(),
 		),
-	), handleCmdHelpPrompt)
+	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return handleCmdHelpPrompt(ctx, request, s.cmdPrefix)
+	})
 
 	mcpServer.AddPrompt(mcp.NewPrompt("list_templates",
 		mcp.WithPromptDescription("prompt to list available function templates"),
 	), handleListTemplatesPrompt)
 
-	return &MCPServer{
-		server: mcpServer,
-	}
+	return s
 }
 
 func (s *MCPServer) Start() error {

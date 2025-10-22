@@ -4,9 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+// parseCommand splits a command string like "kn func" into its parts
+func parseCommand(cmdPrefix string) []string {
+	return strings.Fields(cmdPrefix)
+}
 
 func handleHealthCheckTool(
 	ctx context.Context,
@@ -19,6 +25,7 @@ func handleHealthCheckTool(
 func handleCreateTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	cwd, err := request.RequireString("cwd")
 	if err != nil {
@@ -52,7 +59,11 @@ func handleCreateTool(
 	// `name` is passed as a positional argument (directory to create in)
 	args = append(args, name)
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	cmd.Dir = cwd
 
 	out, err := cmd.CombinedOutput()
@@ -67,6 +78,7 @@ func handleCreateTool(
 func handleDeployTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	cwd, err := request.RequireString("cwd")
 	if err != nil {
@@ -143,7 +155,11 @@ func handleDeployTool(
 		args = append(args, "--remote")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -156,6 +172,7 @@ func handleDeployTool(
 func handleListTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	args := []string{"list"}
 
@@ -173,7 +190,11 @@ func handleListTool(
 		args = append(args, "--verbose")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func list failed: %s", out)), nil
@@ -185,6 +206,7 @@ func handleListTool(
 func handleBuildTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	cwd, err := request.RequireString("cwd")
 	if err != nil {
@@ -231,7 +253,11 @@ func handleBuildTool(
 		args = append(args, "--build-timestamp")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -244,6 +270,7 @@ func handleBuildTool(
 func handleDeleteTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
@@ -270,7 +297,11 @@ func handleDeleteTool(
 		args = append(args, "--verbose")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func delete failed: %s", out)), nil
@@ -283,6 +314,7 @@ func handleDeleteTool(
 func handleConfigVolumesTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	action, err := request.RequireString("action")
 	if err != nil {
@@ -339,7 +371,11 @@ func handleConfigVolumesTool(
 		args = append(args, "--verbose")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func config volumes failed: %s", out)), nil
@@ -352,6 +388,7 @@ func handleConfigVolumesTool(
 func handleConfigLabelsTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	action, err := request.RequireString("action")
 	if err != nil {
@@ -390,7 +427,11 @@ func handleConfigLabelsTool(
 		args = append(args, "--verbose")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func config labels %s failed: %s", action, out)), nil
@@ -403,6 +444,7 @@ func handleConfigLabelsTool(
 func handleConfigEnvsTool(
 	ctx context.Context,
 	request mcp.CallToolRequest,
+	cmdPrefix string,
 ) (*mcp.CallToolResult, error) {
 	action, err := request.RequireString("action")
 	if err != nil {
@@ -443,7 +485,11 @@ func handleConfigEnvsTool(
 		args = append(args, "--verbose")
 	}
 
-	cmd := exec.Command("func", args...)
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := parseCommand(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+
+	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func config envs %s failed: %s", action, out)), nil

@@ -72,7 +72,11 @@ EXAMPLES
 }
 
 func runMCPServer(cmd *cobra.Command, args []string) error {
-	s := mcp.NewServer()
+	// Get the root command's path to determine if we're "func" or "kn func"
+	rootCmd := cmd.Root()
+	cmdPrefix := rootCmd.Use
+
+	s := mcp.NewServer(cmdPrefix)
 	if err := s.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 		return err

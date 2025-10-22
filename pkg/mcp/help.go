@@ -71,8 +71,12 @@ func parseGitHubURL(url string) (owner, repo string) {
 	return parts[0], parts[1]
 }
 
-func handleRootHelpResource(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	content, err := exec.Command("func", "--help").Output()
+func handleRootHelpResource(ctx context.Context, request mcp.ReadResourceRequest, cmdPrefix string) ([]mcp.ResourceContents, error) {
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := strings.Fields(cmdPrefix)
+	cmdParts = append(cmdParts, "--help")
+
+	content, err := exec.Command(cmdParts[0], cmdParts[1:]...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -86,9 +90,13 @@ func handleRootHelpResource(ctx context.Context, request mcp.ReadResourceRequest
 	}, nil
 }
 
-func runHelpCommand(args []string, uri string) ([]mcp.ResourceContents, error) {
-	args = append(args, "--help")
-	content, err := exec.Command("func", args...).Output()
+func runHelpCommand(args []string, uri string, cmdPrefix string) ([]mcp.ResourceContents, error) {
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := strings.Fields(cmdPrefix)
+	cmdParts = append(cmdParts, args...)
+	cmdParts = append(cmdParts, "--help")
+
+	content, err := exec.Command(cmdParts[0], cmdParts[1:]...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +128,7 @@ func handleListTemplatesResource(ctx context.Context, request mcp.ReadResourceRe
 	}, nil
 }
 
-func handleCmdHelpPrompt(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+func handleCmdHelpPrompt(ctx context.Context, request mcp.GetPromptRequest, cmdPrefix string) (*mcp.GetPromptResult, error) {
 	cmd := request.Params.Arguments["cmd"]
 	if cmd == "" {
 		return nil, fmt.Errorf("cmd is required")
@@ -136,7 +144,7 @@ func handleCmdHelpPrompt(ctx context.Context, request mcp.GetPromptRequest) (*mc
 		[]mcp.PromptMessage{
 			mcp.NewPromptMessage(
 				mcp.RoleUser,
-				mcp.NewTextContent("What can I do with this func command? Please provide help for the command: "+cmd),
+				mcp.NewTextContent(fmt.Sprintf("What can I do with this %s command? Please provide help for the command: %s", cmdPrefix, cmd)),
 			),
 			mcp.NewPromptMessage(
 				mcp.RoleAssistant,
@@ -149,13 +157,13 @@ func handleCmdHelpPrompt(ctx context.Context, request mcp.GetPromptRequest) (*mc
 	), nil
 }
 
-func handleRootHelpPrompt(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+func handleRootHelpPrompt(ctx context.Context, request mcp.GetPromptRequest, cmdPrefix string) (*mcp.GetPromptResult, error) {
 	return mcp.NewGetPromptResult(
 		"Help Prompt",
 		[]mcp.PromptMessage{
 			mcp.NewPromptMessage(
 				mcp.RoleUser,
-				mcp.NewTextContent("What can I do with the func command?"),
+				mcp.NewTextContent(fmt.Sprintf("What can I do with the %s command?", cmdPrefix)),
 			),
 			mcp.NewPromptMessage(
 				mcp.RoleAssistant,
