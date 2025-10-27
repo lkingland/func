@@ -176,7 +176,7 @@ For detailed instructions, see: docs/mcp-integration/integration.md`
 	rootCmd := cmd.Root()
 	cmdPrefix := rootCmd.Use
 
-	s := mcp.New(cmdPrefix)
+	s := mcp.New(mcp.WithPrefix(cmdPrefix))
 	if err := s.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 		return err

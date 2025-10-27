@@ -10,12 +10,29 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// toolHandlerFunc decorates mcp tool handlers with a command prefix
-type toolHandlerFunc func(context.Context, mcp.CallToolRequest, string) (*mcp.CallToolResult, error)
+// Executor abstracts command execution for testability
+type Executor interface {
+	Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
+}
 
-func withPrefix(prefix string, impl toolHandlerFunc) server.ToolHandlerFunc {
+// realExecutor implements Executor using os/exec
+type realExecutor struct{}
+
+func (e realExecutor) Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	return cmd.CombinedOutput()
+}
+
+// toolHandlerFunc decorates mcp tool handlers with a command prefix and executor
+type toolHandlerFunc func(context.Context, mcp.CallToolRequest, string, Executor) (*mcp.CallToolResult, error)
+
+// with creates a server.ToolHandlerFunc that injects the prefix and executor
+func with(prefix string, executor Executor, impl toolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return impl(ctx, request, prefix)
+		return impl(ctx, request, prefix, executor)
 	}
 }
 
@@ -28,7 +45,7 @@ func (t healthCheck) desc() mcp.Tool {
 	)
 }
 
-func (t healthCheck) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t healthCheck) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	body := fmt.Sprintf(`{"message": "%s"}`, "The MCP server is running!")
 	return mcp.NewToolResultText(body), nil
 }
@@ -43,6 +60,10 @@ func (t create) desc() mcp.Tool {
 			mcp.Required(),
 			mcp.Description("Current working directory of the MCP client"),
 		),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Name of the function to create"),
+		),
 		mcp.WithString("language",
 			mcp.Required(),
 			mcp.Description("Language runtime to use (e.g., node, go, python)"),
@@ -55,8 +76,12 @@ func (t create) desc() mcp.Tool {
 	)
 }
 
-func (t create) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t create) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	cwd, err := request.RequireString("cwd")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	name, err := request.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -88,10 +113,7 @@ func (t create) handle(ctx context.Context, request mcp.CallToolRequest, cmdPref
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	cmd.Dir = cwd
-
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, cwd, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func create failed: %s", out)), nil
 	}
@@ -143,7 +165,7 @@ func (t deploy) desc() mcp.Tool {
 	)
 }
 
-func (t deploy) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t deploy) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	cwd, err := request.RequireString("cwd")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -223,9 +245,7 @@ func (t deploy) handle(ctx context.Context, request mcp.CallToolRequest, cmdPref
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	cmd.Dir = cwd
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, cwd, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func deploy failed: %s", out)), nil
 	}
@@ -248,7 +268,7 @@ func (t list) desc() mcp.Tool {
 	)
 }
 
-func (t list) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t list) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	args := []string{"list"}
 
 	// Optional flags
@@ -269,8 +289,7 @@ func (t list) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func list failed: %s", out)), nil
 	}
@@ -311,7 +330,7 @@ func (t build) desc() mcp.Tool {
 	)
 }
 
-func (t build) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t build) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	cwd, err := request.RequireString("cwd")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -361,9 +380,7 @@ func (t build) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefi
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	cmd.Dir = cwd
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, cwd, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func build failed: %s", out)), nil
 	}
@@ -392,7 +409,7 @@ func (t del) desc() mcp.Tool {
 	)
 }
 
-func (t del) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t del) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -422,8 +439,7 @@ func (t del) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix 
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func delete failed: %s", out)), nil
 	}
@@ -458,7 +474,7 @@ func (t configVolumes) desc() mcp.Tool {
 	)
 }
 
-func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	action, err := request.RequireString("action")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -476,8 +492,7 @@ func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, 
 
 		cmdParts := parseCommand(cmdPrefix)
 		cmdParts = append(cmdParts, args...)
-		cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-		out, err := cmd.CombinedOutput()
+		out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("func config volumes list failed: %s", out)), nil
 		}
@@ -521,8 +536,7 @@ func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, 
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func config volumes failed: %s", out)), nil
 	}
@@ -553,7 +567,7 @@ func (t configLabels) desc() mcp.Tool {
 	)
 }
 
-func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	action, err := request.RequireString("action")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -571,8 +585,7 @@ func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, c
 
 		cmdParts := parseCommand(cmdPrefix)
 		cmdParts = append(cmdParts, args...)
-		cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-		out, err := cmd.CombinedOutput()
+		out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("func config labels list failed: %s", out)), nil
 		}
@@ -597,8 +610,7 @@ func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, c
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func config labels %s failed: %s", action, out)), nil
 	}
@@ -629,7 +641,7 @@ func (t configEnvs) desc() mcp.Tool {
 	)
 }
 
-func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string) (*mcp.CallToolResult, error) {
+func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	action, err := request.RequireString("action")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -648,8 +660,7 @@ func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmd
 
 		cmdParts := parseCommand(cmdPrefix)
 		cmdParts = append(cmdParts, args...)
-		cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-		out, err := cmd.CombinedOutput()
+		out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("func config envs list failed: %s", out)), nil
 		}
@@ -675,8 +686,7 @@ func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmd
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
-	out, err := cmd.CombinedOutput()
+	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("func config envs %s failed: %s", action, out)), nil
 	}
