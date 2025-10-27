@@ -22,7 +22,7 @@ func fetchTemplates() ([]template, error) {
 	var out []template
 	seen := make(map[string]bool)
 
-	for _, repoURL := range TEMPLATE_RESOURCE_URIS {
+	for _, repoURL := range templateRepos {
 		owner, repo := parseGitHubURL(repoURL)
 		api := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/main?recursive=1", owner, repo)
 
