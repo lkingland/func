@@ -21,7 +21,7 @@ type Server struct {
 
 type tool interface {
 	desc() *mcp.Tool
-	handle(context.Context, *mcp.CallToolRequest, string, Executor) (*mcp.CallToolResult, error)
+	handle(context.Context, toolRequestInterface, string, Executor) (*mcp.CallToolResult, error)
 }
 
 type resource interface {
@@ -34,24 +34,20 @@ type prompt interface {
 	handler(prefix string) mcp.PromptHandler
 }
 
-// Option is a functional option for configuring a Server
 type Option func(*Server)
 
-// WithPrefix sets the command prefix (e.g., "func" or "kn func")
 func WithPrefix(prefix string) Option {
 	return func(s *Server) {
 		s.prefix = prefix
 	}
 }
 
-// WithExecutor sets the command executor for the server
 func WithExecutor(executor Executor) Option {
 	return func(s *Server) {
 		s.executor = executor
 	}
 }
 
-// DefaultCommand is the default function command to use when executing.
 const DefaultCommand = "func"
 
 func New(options ...Option) *Server {
@@ -64,14 +60,14 @@ func New(options ...Option) *Server {
 		}, nil),
 		tools: []tool{
 			healthCheck{},
-			create{},
-			deploy{},
-			list{},
-			build{},
-			del{},
-			configVolumes{},
-			configLabels{},
-			configEnvs{},
+			createTool{},
+			deployTool{},
+			listTool{},
+			buildTool{},
+			deleteTool{},
+			configVolumesTool{},
+			configLabelsTool{},
+			configEnvsTool{},
 		},
 		resources: []resource{
 			rootHelpResource{},
@@ -95,7 +91,6 @@ func New(options ...Option) *Server {
 		},
 	}
 
-	// Apply functional options
 	for _, o := range options {
 		o(s)
 	}
@@ -115,6 +110,13 @@ func New(options ...Option) *Server {
 	return s
 }
 
-func (s *Server) Start() error {
-	return s.impl.Run(context.Background(), &mcp.StdioTransport{})
+// Start the server in blocking mode using default STDIO transport.
+func (s *Server) Start(ctx context.Context) error {
+	return s.impl.Run(ctx, &mcp.StdioTransport{})
+}
+
+// Connect starts the server with a custom context and transport (for testing)
+// Non-blocking mode for testing.
+func (s *Server) Connect(ctx context.Context, transport mcp.Transport) (*mcp.ServerSession, error) {
+	return s.impl.Connect(ctx, transport, nil)
 }
