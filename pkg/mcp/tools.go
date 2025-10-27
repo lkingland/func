@@ -2,12 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Executor abstracts command execution for testability
@@ -27,82 +28,180 @@ func (e realExecutor) Execute(ctx context.Context, dir string, name string, args
 }
 
 // toolHandlerFunc decorates mcp tool handlers with a command prefix and executor
-type toolHandlerFunc func(context.Context, mcp.CallToolRequest, string, Executor) (*mcp.CallToolResult, error)
+type toolHandlerFunc func(context.Context, *mcp.CallToolRequest, string, Executor) (*mcp.CallToolResult, error)
 
-// with creates a server.ToolHandlerFunc that injects the prefix and executor
-func with(prefix string, executor Executor, impl toolHandlerFunc) server.ToolHandlerFunc {
-	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// with creates a mcp.ToolHandler that injects the prefix and executor
+func with(prefix string, executor Executor, impl toolHandlerFunc) mcp.ToolHandler {
+	return func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return impl(ctx, request, prefix, executor)
+	}
+}
+
+// Helper functions for the new API
+
+func unmarshalArgs(request *mcp.CallToolRequest) (map[string]interface{}, error) {
+	var args map[string]interface{}
+	params := request.GetParams().(*mcp.CallToolParamsRaw)
+	if err := json.Unmarshal(params.Arguments, &args); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal arguments: %w", err)
+	}
+	return args, nil
+}
+
+func requireString(request *mcp.CallToolRequest, key string) (string, error) {
+	args, err := unmarshalArgs(request)
+	if err != nil {
+		return "", err
+	}
+	val, ok := args[key]
+	if !ok {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	str, ok := val.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	if str == "" {
+		return "", fmt.Errorf("%s cannot be empty", key)
+	}
+	return str, nil
+}
+
+func getString(request *mcp.CallToolRequest, key string, defaultVal string) string {
+	args, err := unmarshalArgs(request)
+	if err != nil {
+		return defaultVal
+	}
+	val, ok := args[key]
+	if !ok {
+		return defaultVal
+	}
+	str, ok := val.(string)
+	if !ok {
+		return defaultVal
+	}
+	return str
+}
+
+func getBool(request *mcp.CallToolRequest, key string, defaultVal bool) bool {
+	args, err := unmarshalArgs(request)
+	if err != nil {
+		return defaultVal
+	}
+	val, ok := args[key]
+	if !ok {
+		return defaultVal
+	}
+	b, ok := val.(bool)
+	if !ok {
+		return defaultVal
+	}
+	return b
+}
+
+func textResult(text string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: text},
+		},
+	}
+}
+
+func errorResult(msg string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: msg},
+		},
 	}
 }
 
 // healthCheck
 type healthCheck struct{}
 
-func (t healthCheck) desc() mcp.Tool {
-	return mcp.NewTool("healthcheck",
-		mcp.WithDescription("Checks if the server is running"),
-	)
+func (t healthCheck) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "healthcheck",
+		Description: "Checks if the server is running",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	}
 }
 
-func (t healthCheck) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+func (t healthCheck) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	body := fmt.Sprintf(`{"message": "%s"}`, "The MCP server is running!")
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // func create
 type create struct{}
 
-func (t create) desc() mcp.Tool {
-	return mcp.NewTool("create",
-		mcp.WithDescription("Create a Knative function project in the current working directory (should be empty)"),
-		mcp.WithString("cwd",
-			mcp.Required(),
-			mcp.Description("Current working directory of the MCP client"),
-		),
-		mcp.WithString("name",
-			mcp.Required(),
-			mcp.Description("Name of the function to create"),
-		),
-		mcp.WithString("language",
-			mcp.Required(),
-			mcp.Description("Language runtime to use (e.g., node, go, python)"),
-		),
-
-		// Optional flags
-		mcp.WithString("template", mcp.Description("Function template (e.g., http, cloudevents)")),
-		mcp.WithString("repository", mcp.Description("URI to Git repo containing the template. Overrides default template selection when provided.")),
-		mcp.WithBoolean("verbose", mcp.Description("Print verbose logs")),
-	)
+func (t create) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "create",
+		Description: "Create a Knative function project in the current working directory (should be empty)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"cwd": map[string]interface{}{
+					"type":        "string",
+					"description": "Current working directory of the MCP client",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Name of the function to create",
+				},
+				"language": map[string]interface{}{
+					"type":        "string",
+					"description": "Language runtime to use (e.g., node, go, python)",
+				},
+				"template": map[string]interface{}{
+					"type":        "string",
+					"description": "Function template (e.g., http, cloudevents)",
+				},
+				"repository": map[string]interface{}{
+					"type":        "string",
+					"description": "URI to Git repo containing the template. Overrides default template selection when provided.",
+				},
+				"verbose": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Print verbose logs",
+				},
+			},
+			"required": []string{"cwd", "name", "language"},
+		},
+	}
 }
 
-func (t create) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	cwd, err := request.RequireString("cwd")
+func (t create) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	cwd, err := requireString(request, "cwd")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	name, err := request.RequireString("name")
+	name, err := requireString(request, "name")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	language, err := request.RequireString("language")
+	language, err := requireString(request, "language")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	args := []string{"create", "-l", language}
 
 	// Optional flags
-	if v := request.GetString("template", ""); v != "" {
+	if v := getString(request, "template", ""); v != "" {
 		args = append(args, "--template", v)
 	}
-	if v := request.GetString("repository", ""); v != "" {
+	if v := getString(request, "repository", ""); v != "" {
 		args = append(args, "--repository", v)
 	}
-	if request.GetBool("confirm", false) {
+	if getBool(request, "confirm", false) {
 		args = append(args, "--confirm")
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
 
@@ -115,129 +214,133 @@ func (t create) handle(ctx context.Context, request mcp.CallToolRequest, cmdPref
 
 	out, err := executor.Execute(ctx, cwd, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func create failed: %s", out)), nil
+		return errorResult(fmt.Sprintf("func create failed: %s", out)), nil
 	}
 
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // deploy
 type deploy struct{}
 
-func (t deploy) desc() mcp.Tool {
-	return mcp.NewTool("deploy",
-		mcp.WithDescription("Deploys the function to the cluster"),
-		mcp.WithString("registry",
-			mcp.Required(),
-			mcp.Description("Registry to be used to push the function image"),
-		),
-		mcp.WithString("cwd",
-			mcp.Required(),
-			mcp.Description("Full path of the function to be deployed"),
-		),
-		mcp.WithString("builder",
-			mcp.Required(),
-			mcp.Description("Builder to be used to build the function image"),
-		),
-
-		// Optional flags
-		mcp.WithString("image", mcp.Description("Full image name (overrides registry)")),
-		mcp.WithString("namespace", mcp.Description("Namespace to deploy the function into")),
-		mcp.WithString("git-url", mcp.Description("Git URL containing the function source")),
-		mcp.WithString("git-branch", mcp.Description("Git branch for remote deployment")),
-		mcp.WithString("git-dir", mcp.Description("Directory inside the Git repository")),
-		mcp.WithString("builder-image", mcp.Description("Custom builder image")),
-		mcp.WithString("domain", mcp.Description("Domain for the function route")),
-		mcp.WithString("platform", mcp.Description("Target platform to build for (e.g., linux/amd64)")),
-		mcp.WithString("path", mcp.Description("Path to the function directory")),
-		mcp.WithString("build", mcp.Description(`Build control: "true", "false", or "auto"`)),
-		mcp.WithString("pvc-size", mcp.Description("Custom volume size for remote builds")),
-		mcp.WithString("service-account", mcp.Description("Kubernetes ServiceAccount to use")),
-		mcp.WithString("remote-storage-class", mcp.Description("Storage class for remote volume")),
-
-		mcp.WithBoolean("confirm", mcp.Description("Prompt for confirmation before deploying")),
-		mcp.WithBoolean("push", mcp.Description("Push image to registry before deployment")),
-		mcp.WithBoolean("verbose", mcp.Description("Print verbose logs")),
-		mcp.WithBoolean("registry-insecure", mcp.Description("Skip TLS verification for registry")),
-		mcp.WithBoolean("build-timestamp", mcp.Description("Use actual time in image metadata")),
-		mcp.WithBoolean("remote", mcp.Description("Trigger remote deployment")),
-	)
+func (t deploy) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "deploy",
+		Description: "Deploys the function to the cluster",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"registry": map[string]interface{}{
+					"type":        "string",
+					"description": "Registry to be used to push the function image",
+				},
+				"cwd": map[string]interface{}{
+					"type":        "string",
+					"description": "Full path of the function to be deployed",
+				},
+				"builder": map[string]interface{}{
+					"type":        "string",
+					"description": "Builder to be used to build the function image",
+				},
+				"image":                 map[string]interface{}{"type": "string", "description": "Full image name (overrides registry)"},
+				"namespace":             map[string]interface{}{"type": "string", "description": "Namespace to deploy the function into"},
+				"git-url":               map[string]interface{}{"type": "string", "description": "Git URL containing the function source"},
+				"git-branch":            map[string]interface{}{"type": "string", "description": "Git branch for remote deployment"},
+				"git-dir":               map[string]interface{}{"type": "string", "description": "Directory inside the Git repository"},
+				"builder-image":         map[string]interface{}{"type": "string", "description": "Custom builder image"},
+				"domain":                map[string]interface{}{"type": "string", "description": "Domain for the function route"},
+				"platform":              map[string]interface{}{"type": "string", "description": "Target platform to build for (e.g., linux/amd64)"},
+				"path":                  map[string]interface{}{"type": "string", "description": "Path to the function directory"},
+				"build":                 map[string]interface{}{"type": "string", "description": `Build control: "true", "false", or "auto"`},
+				"pvc-size":              map[string]interface{}{"type": "string", "description": "Custom volume size for remote builds"},
+				"service-account":       map[string]interface{}{"type": "string", "description": "Kubernetes ServiceAccount to use"},
+				"remote-storage-class":  map[string]interface{}{"type": "string", "description": "Storage class for remote volume"},
+				"confirm":               map[string]interface{}{"type": "boolean", "description": "Prompt for confirmation before deploying"},
+				"push":                  map[string]interface{}{"type": "boolean", "description": "Push image to registry before deployment"},
+				"verbose":               map[string]interface{}{"type": "boolean", "description": "Print verbose logs"},
+				"registry-insecure":     map[string]interface{}{"type": "boolean", "description": "Skip TLS verification for registry"},
+				"build-timestamp":       map[string]interface{}{"type": "boolean", "description": "Use actual time in image metadata"},
+				"remote":                map[string]interface{}{"type": "boolean", "description": "Trigger remote deployment"},
+			},
+			"required": []string{"cwd", "registry", "builder"},
+		},
+	}
 }
 
-func (t deploy) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	cwd, err := request.RequireString("cwd")
+func (t deploy) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	cwd, err := requireString(request, "cwd")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	registry, err := request.RequireString("registry")
+	registry, err := requireString(request, "registry")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	builder, err := request.RequireString("builder")
+	builder, err := requireString(request, "builder")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	args := []string{"deploy", "--builder", builder, "--registry", registry}
 
 	// Optional flags
-	if v := request.GetString("image", ""); v != "" {
+	if v := getString(request, "image", ""); v != "" {
 		args = append(args, "--image", v)
 	}
-	if v := request.GetString("namespace", ""); v != "" {
+	if v := getString(request, "namespace", ""); v != "" {
 		args = append(args, "--namespace", v)
 	}
-	if v := request.GetString("git-url", ""); v != "" {
+	if v := getString(request, "git-url", ""); v != "" {
 		args = append(args, "--git-url", v)
 	}
-	if v := request.GetString("git-branch", ""); v != "" {
+	if v := getString(request, "git-branch", ""); v != "" {
 		args = append(args, "--git-branch", v)
 	}
-	if v := request.GetString("git-dir", ""); v != "" {
+	if v := getString(request, "git-dir", ""); v != "" {
 		args = append(args, "--git-dir", v)
 	}
-	if v := request.GetString("builder-image", ""); v != "" {
+	if v := getString(request, "builder-image", ""); v != "" {
 		args = append(args, "--builder-image", v)
 	}
-	if v := request.GetString("domain", ""); v != "" {
+	if v := getString(request, "domain", ""); v != "" {
 		args = append(args, "--domain", v)
 	}
-	if v := request.GetString("platform", ""); v != "" {
+	if v := getString(request, "platform", ""); v != "" {
 		args = append(args, "--platform", v)
 	}
-	if v := request.GetString("path", ""); v != "" {
+	if v := getString(request, "path", ""); v != "" {
 		args = append(args, "--path", v)
 	}
-	if v := request.GetString("build", ""); v != "" {
+	if v := getString(request, "build", ""); v != "" {
 		args = append(args, "--build", v)
 	}
-	if v := request.GetString("pvc-size", ""); v != "" {
+	if v := getString(request, "pvc-size", ""); v != "" {
 		args = append(args, "--pvc-size", v)
 	}
-	if v := request.GetString("service-account", ""); v != "" {
+	if v := getString(request, "service-account", ""); v != "" {
 		args = append(args, "--service-account", v)
 	}
-	if v := request.GetString("remote-storage-class", ""); v != "" {
+	if v := getString(request, "remote-storage-class", ""); v != "" {
 		args = append(args, "--remote-storage-class", v)
 	}
 
-	if request.GetBool("confirm", false) {
+	if getBool(request, "confirm", false) {
 		args = append(args, "--confirm")
 	}
-	if request.GetBool("push", false) {
+	if getBool(request, "push", false) {
 		args = append(args, "--push")
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
-	if request.GetBool("registry-insecure", false) {
+	if getBool(request, "registry-insecure", false) {
 		args = append(args, "--registry-insecure")
 	}
-	if request.GetBool("build-timestamp", false) {
+	if getBool(request, "build-timestamp", false) {
 		args = append(args, "--build-timestamp")
 	}
-	if request.GetBool("remote", false) {
+	if getBool(request, "remote", false) {
 		args = append(args, "--remote")
 	}
 
@@ -247,41 +350,45 @@ func (t deploy) handle(ctx context.Context, request mcp.CallToolRequest, cmdPref
 
 	out, err := executor.Execute(ctx, cwd, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func deploy failed: %s", out)), nil
+		return errorResult(fmt.Sprintf("func deploy failed: %s", out)), nil
 	}
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // list
 type list struct{}
 
-func (t list) desc() mcp.Tool {
-	return mcp.NewTool("list",
-		mcp.WithDescription("Lists all deployed functions in the current or specified namespace"),
-
-		// Optional flags
-		mcp.WithBoolean("all-namespaces", mcp.Description("List functions in all namespaces (overrides --namespace)")),
-		mcp.WithString("namespace", mcp.Description("The namespace to list functions in (default is current/active)")),
-		mcp.WithString("output", mcp.Description("Output format: human, plain, json, xml, yaml")),
-		mcp.WithBoolean("verbose", mcp.Description("Enable verbose output")),
-	)
+func (t list) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "list",
+		Description: "Lists all deployed functions in the current or specified namespace",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"all-namespaces": map[string]interface{}{"type": "boolean", "description": "List functions in all namespaces (overrides --namespace)"},
+				"namespace":      map[string]interface{}{"type": "string", "description": "The namespace to list functions in (default is current/active)"},
+				"output":         map[string]interface{}{"type": "string", "description": "Output format: human, plain, json, xml, yaml"},
+				"verbose":        map[string]interface{}{"type": "boolean", "description": "Enable verbose output"},
+			},
+		},
+	}
 }
 
-func (t list) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+func (t list) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
 	args := []string{"list"}
 
 	// Optional flags
-	if request.GetBool("all-namespaces", false) {
+	if getBool(request, "all-namespaces", false) {
 		args = append(args, "--all-namespaces")
 	}
-	if v := request.GetString("namespace", ""); v != "" {
+	if v := getString(request, "namespace", ""); v != "" {
 		args = append(args, "--namespace", v)
 	}
-	if v := request.GetString("output", ""); v != "" {
+	if v := getString(request, "output", ""); v != "" {
 		args = append(args, "--output", v)
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
 
@@ -291,88 +398,92 @@ func (t list) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix
 
 	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func list failed: %s", out)), nil
+		return errorResult(fmt.Sprintf("func list failed: %s", out)), nil
 	}
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // build
 type build struct{}
 
-func (t build) desc() mcp.Tool {
-	return mcp.NewTool("build",
-		mcp.WithDescription("Builds the function image in the current directory"),
-		mcp.WithString("cwd",
-			mcp.Required(),
-			mcp.Description("Current working directory of the MCP client"),
-		),
-		mcp.WithString("builder",
-			mcp.Required(),
-			mcp.Description("Builder to be used to build the function image (pack, s2i, host)"),
-		),
-		mcp.WithString("registry",
-			mcp.Required(),
-			mcp.Description("Registry to be used to push the function image (e.g. ghcr.io/user)"),
-		),
-
-		// Optional flags
-		mcp.WithString("builder-image", mcp.Description("Custom builder image to use with buildpacks")),
-		mcp.WithString("image", mcp.Description("Full image name (overrides registry + function name)")),
-		mcp.WithString("path", mcp.Description("Path to the function directory (default is current dir)")),
-		mcp.WithString("platform", mcp.Description("Target platform, e.g. linux/amd64 (for s2i builds)")),
-
-		mcp.WithBoolean("confirm", mcp.Description("Prompt for confirmation before proceeding")),
-		mcp.WithBoolean("push", mcp.Description("Push image to registry after building")),
-		mcp.WithBoolean("verbose", mcp.Description("Enable verbose logging output")),
-		mcp.WithBoolean("registry-insecure", mcp.Description("Skip TLS verification for insecure registries")),
-		mcp.WithBoolean("build-timestamp", mcp.Description("Use actual time for image timestamp (buildpacks only)")),
-	)
+func (t build) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "build",
+		Description: "Builds the function image in the current directory",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"cwd": map[string]interface{}{
+					"type":        "string",
+					"description": "Current working directory of the MCP client",
+				},
+				"builder": map[string]interface{}{
+					"type":        "string",
+					"description": "Builder to be used to build the function image (pack, s2i, host)",
+				},
+				"registry": map[string]interface{}{
+					"type":        "string",
+					"description": "Registry to be used to push the function image (e.g. ghcr.io/user)",
+				},
+				"builder-image":     map[string]interface{}{"type": "string", "description": "Custom builder image to use with buildpacks"},
+				"image":             map[string]interface{}{"type": "string", "description": "Full image name (overrides registry + function name)"},
+				"path":              map[string]interface{}{"type": "string", "description": "Path to the function directory (default is current dir)"},
+				"platform":          map[string]interface{}{"type": "string", "description": "Target platform, e.g. linux/amd64 (for s2i builds)"},
+				"confirm":           map[string]interface{}{"type": "boolean", "description": "Prompt for confirmation before proceeding"},
+				"push":              map[string]interface{}{"type": "boolean", "description": "Push image to registry after building"},
+				"verbose":           map[string]interface{}{"type": "boolean", "description": "Enable verbose logging output"},
+				"registry-insecure": map[string]interface{}{"type": "boolean", "description": "Skip TLS verification for insecure registries"},
+				"build-timestamp":   map[string]interface{}{"type": "boolean", "description": "Use actual time for image timestamp (buildpacks only)"},
+			},
+			"required": []string{"cwd", "builder", "registry"},
+		},
+	}
 }
 
-func (t build) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	cwd, err := request.RequireString("cwd")
+func (t build) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	cwd, err := requireString(request, "cwd")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	builder, err := request.RequireString("builder")
+	builder, err := requireString(request, "builder")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	registry, err := request.RequireString("registry")
+	registry, err := requireString(request, "registry")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	args := []string{"build", "--builder", builder, "--registry", registry}
 
 	// Optional flags
-	if v := request.GetString("builder-image", ""); v != "" {
+	if v := getString(request, "builder-image", ""); v != "" {
 		args = append(args, "--builder-image", v)
 	}
-	if v := request.GetString("image", ""); v != "" {
+	if v := getString(request, "image", ""); v != "" {
 		args = append(args, "--image", v)
 	}
-	if v := request.GetString("path", ""); v != "" {
+	if v := getString(request, "path", ""); v != "" {
 		args = append(args, "--path", v)
 	}
-	if v := request.GetString("platform", ""); v != "" {
+	if v := getString(request, "platform", ""); v != "" {
 		args = append(args, "--platform", v)
 	}
 
-	if request.GetBool("confirm", false) {
+	if getBool(request, "confirm", false) {
 		args = append(args, "--confirm")
 	}
-	if request.GetBool("push", false) {
+	if getBool(request, "push", false) {
 		args = append(args, "--push")
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
-	if request.GetBool("registry-insecure", false) {
+	if getBool(request, "registry-insecure", false) {
 		args = append(args, "--registry-insecure")
 	}
-	if request.GetBool("build-timestamp", false) {
+	if getBool(request, "build-timestamp", false) {
 		args = append(args, "--build-timestamp")
 	}
 
@@ -382,56 +493,60 @@ func (t build) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefi
 
 	out, err := executor.Execute(ctx, cwd, cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func build failed: %s", out)), nil
+		return errorResult(fmt.Sprintf("func build failed: %s", out)), nil
 	}
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // delete
 type del struct{}
 
-func (t del) desc() mcp.Tool {
-	return mcp.NewTool("delete",
-		mcp.WithDescription("Deletes a function from the cluster"),
-		mcp.WithString("name",
-			mcp.Required(),
-			mcp.Description("Name of the function to be deleted"),
-		),
-
-		// Optional flags
-		mcp.WithString("namespace", mcp.Description("Namespace to delete from (default: current or active)")),
-		mcp.WithString("path", mcp.Description("Path to the function project (default is current directory)")),
-		mcp.WithString("all", mcp.Description(`Delete all related resources like Pipelines, Secrets ("true"/"false")`)),
-
-		mcp.WithBoolean("confirm", mcp.Description("Prompt to confirm before deletion")),
-		mcp.WithBoolean("verbose", mcp.Description("Enable verbose output")),
-	)
+func (t del) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "delete",
+		Description: "Deletes a function from the cluster",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Name of the function to be deleted",
+				},
+				"namespace": map[string]interface{}{"type": "string", "description": "Namespace to delete from (default: current or active)"},
+				"path":      map[string]interface{}{"type": "string", "description": "Path to the function project (default is current directory)"},
+				"all":       map[string]interface{}{"type": "string", "description": `Delete all related resources like Pipelines, Secrets ("true"/"false")`},
+				"confirm":   map[string]interface{}{"type": "boolean", "description": "Prompt to confirm before deletion"},
+				"verbose":   map[string]interface{}{"type": "boolean", "description": "Enable verbose output"},
+			},
+			"required": []string{"name"},
+		},
+	}
 }
 
-func (t del) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	name, err := request.RequireString("name")
+func (t del) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	name, err := requireString(request, "name")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	args := []string{"delete", name}
 
 	// Optional flags
-	if v := request.GetString("namespace", ""); v != "" {
+	if v := getString(request, "namespace", ""); v != "" {
 		args = append(args, "--namespace", v)
 	}
-	if v := request.GetString("path", ""); v != "" {
+	if v := getString(request, "path", ""); v != "" {
 		args = append(args, "--path", v)
 	}
-	if v := request.GetString("all", ""); v != "" {
+	if v := getString(request, "all", ""); v != "" {
 		args = append(args, "--all", v)
 	}
 
-	if request.GetBool("confirm", false) {
+	if getBool(request, "confirm", false) {
 		args = append(args, "--confirm")
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
 
@@ -441,52 +556,57 @@ func (t del) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix 
 
 	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func delete failed: %s", out)), nil
+		return errorResult(fmt.Sprintf("func delete failed: %s", out)), nil
 	}
 
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // configVolumes
 type configVolumes struct{}
 
-func (t configVolumes) desc() mcp.Tool {
-	return mcp.NewTool("config_volumes",
-		mcp.WithDescription("Lists and manages configured volumes for a function"),
-		mcp.WithString("action",
-			mcp.Required(),
-			mcp.Description("The action to perform: 'add' to add a volume, 'remove' to remove a volume, 'list' to list volumes"),
-		),
-		mcp.WithString("path",
-			mcp.Required(),
-			mcp.Description("Path to the function. Default is current directory ($FUNC_PATH)"),
-		),
-
-		// Optional flags
-		mcp.WithString("type", mcp.Description("Volume type: configmap, secret, pvc, or emptydir")),
-		mcp.WithString("mount_path", mcp.Description("Mount path for the volume in the function container")),
-		mcp.WithString("source", mcp.Description("Name of the ConfigMap, Secret, or PVC to mount (not used for emptydir)")),
-		mcp.WithString("medium", mcp.Description("Storage medium for EmptyDir volume: 'Memory' or '' (default)")),
-		mcp.WithString("size", mcp.Description("Maximum size limit for EmptyDir volume (e.g., 1Gi)")),
-		mcp.WithBoolean("read_only", mcp.Description("Mount volume as read-only (only for PVC)")),
-		mcp.WithBoolean("verbose", mcp.Description("Print verbose logs ($FUNC_VERBOSE)")),
-	)
+func (t configVolumes) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "config_volumes",
+		Description: "Lists and manages configured volumes for a function",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"action": map[string]interface{}{
+					"type":        "string",
+					"description": "The action to perform: 'add' to add a volume, 'remove' to remove a volume, 'list' to list volumes",
+				},
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Path to the function. Default is current directory ($FUNC_PATH)",
+				},
+				"type":       map[string]interface{}{"type": "string", "description": "Volume type: configmap, secret, pvc, or emptydir"},
+				"mount_path": map[string]interface{}{"type": "string", "description": "Mount path for the volume in the function container"},
+				"source":     map[string]interface{}{"type": "string", "description": "Name of the ConfigMap, Secret, or PVC to mount (not used for emptydir)"},
+				"medium":     map[string]interface{}{"type": "string", "description": "Storage medium for EmptyDir volume: 'Memory' or '' (default)"},
+				"size":       map[string]interface{}{"type": "string", "description": "Maximum size limit for EmptyDir volume (e.g., 1Gi)"},
+				"read_only":  map[string]interface{}{"type": "boolean", "description": "Mount volume as read-only (only for PVC)"},
+				"verbose":    map[string]interface{}{"type": "boolean", "description": "Print verbose logs ($FUNC_VERBOSE)"},
+			},
+			"required": []string{"action", "path"},
+		},
+	}
 }
 
-func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	action, err := request.RequireString("action")
+func (t configVolumes) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	action, err := requireString(request, "action")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	path, err := request.RequireString("path")
+	path, err := requireString(request, "path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	if action == "list" {
 		args := []string{"config", "volumes", "--path", path}
-		if request.GetBool("verbose", false) {
+		if getBool(request, "verbose", false) {
 			args = append(args, "--verbose")
 		}
 
@@ -494,41 +614,44 @@ func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, 
 		cmdParts = append(cmdParts, args...)
 		out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("func config volumes list failed: %s", out)), nil
+			return errorResult(fmt.Sprintf("func config volumes list failed: %s", out)), nil
 		}
 		body := fmt.Sprintf(`{"result": "%s"}`, out)
-		return mcp.NewToolResultText(body), nil
+		return textResult(body), nil
 	}
 
 	args := []string{"config", "volumes", action}
 
 	if action == "add" {
-		volumeType, err := request.RequireString("type")
+		volumeType, err := requireString(request, "type")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return errorResult(err.Error()), nil
 		}
 		args = append(args, "--type", volumeType)
 	}
-	mountPath, err := request.RequireString("mount_path")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	mountPath := getString(request, "mount_path", "")
+	if mountPath == "" && action != "remove" {
+		return errorResult(errors.New("mount_path is required for add action").Error()), nil
 	}
-	args = append(args, "--mount-path", mountPath, "--path", path)
+	if mountPath != "" {
+		args = append(args, "--mount-path", mountPath)
+	}
+	args = append(args, "--path", path)
 
 	// Optional flags
-	if v := request.GetString("source", ""); v != "" {
+	if v := getString(request, "source", ""); v != "" {
 		args = append(args, "--source", v)
 	}
-	if v := request.GetString("medium", ""); v != "" {
+	if v := getString(request, "medium", ""); v != "" {
 		args = append(args, "--medium", v)
 	}
-	if v := request.GetString("size", ""); v != "" {
+	if v := getString(request, "size", ""); v != "" {
 		args = append(args, "--size", v)
 	}
-	if request.GetBool("read_only", false) {
+	if getBool(request, "read_only", false) {
 		args = append(args, "--read-only")
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
 
@@ -538,48 +661,53 @@ func (t configVolumes) handle(ctx context.Context, request mcp.CallToolRequest, 
 
 	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func config volumes failed: %s", out)), nil
+		return errorResult(fmt.Sprintf("func config volumes failed: %s", out)), nil
 	}
 
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // configLabels
 type configLabels struct{}
 
-func (t configLabels) desc() mcp.Tool {
-	return mcp.NewTool("config_labels",
-		mcp.WithDescription("Lists and manages labels for a function"),
-		mcp.WithString("action",
-			mcp.Required(),
-			mcp.Description("The action to perform: 'add' to add a label, 'remove' to remove a label, 'list' to list labels"),
-		),
-		mcp.WithString("path",
-			mcp.Required(),
-			mcp.Description("Path to the function. Default is current directory ($FUNC_PATH)"),
-		),
-
-		// Optional flags
-		mcp.WithString("name", mcp.Description("Name of the label.")),
-		mcp.WithString("value", mcp.Description("Value of the label.")),
-		mcp.WithBoolean("verbose", mcp.Description("Print verbose logs ($FUNC_VERBOSE)")),
-	)
+func (t configLabels) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "config_labels",
+		Description: "Lists and manages labels for a function",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"action": map[string]interface{}{
+					"type":        "string",
+					"description": "The action to perform: 'add' to add a label, 'remove' to remove a label, 'list' to list labels",
+				},
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Path to the function. Default is current directory ($FUNC_PATH)",
+				},
+				"name":    map[string]interface{}{"type": "string", "description": "Name of the label."},
+				"value":   map[string]interface{}{"type": "string", "description": "Value of the label."},
+				"verbose": map[string]interface{}{"type": "boolean", "description": "Print verbose logs ($FUNC_VERBOSE)"},
+			},
+			"required": []string{"action", "path"},
+		},
+	}
 }
 
-func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	action, err := request.RequireString("action")
+func (t configLabels) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	action, err := requireString(request, "action")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	path, err := request.RequireString("path")
+	path, err := requireString(request, "path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	if action == "list" {
 		args := []string{"config", "labels", "--path", path}
-		if request.GetBool("verbose", false) {
+		if getBool(request, "verbose", false) {
 			args = append(args, "--verbose")
 		}
 
@@ -587,22 +715,22 @@ func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, c
 		cmdParts = append(cmdParts, args...)
 		out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("func config labels list failed: %s", out)), nil
+			return errorResult(fmt.Sprintf("func config labels list failed: %s", out)), nil
 		}
 		body := fmt.Sprintf(`{"result": "%s"}`, out)
-		return mcp.NewToolResultText(body), nil
+		return textResult(body), nil
 	}
 
 	args := []string{"config", "labels", action, "--path", path}
 
 	// Optional flags
-	if name := request.GetString("name", ""); name != "" {
+	if name := getString(request, "name", ""); name != "" {
 		args = append(args, "--name", name)
 	}
-	if value := request.GetString("value", ""); value != "" {
+	if value := getString(request, "value", ""); value != "" {
 		args = append(args, "--value", value)
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
 
@@ -612,49 +740,54 @@ func (t configLabels) handle(ctx context.Context, request mcp.CallToolRequest, c
 
 	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func config labels %s failed: %s", action, out)), nil
+		return errorResult(fmt.Sprintf("func config labels %s failed: %s", action, out)), nil
 	}
 
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // configEnvs
 type configEnvs struct{}
 
-func (t configEnvs) desc() mcp.Tool {
-	return mcp.NewTool("config_envs",
-		mcp.WithDescription("Lists and manages environment variables for a function"),
-		mcp.WithString("action",
-			mcp.Required(),
-			mcp.Description("The action to perform: 'add' to add an env var, 'remove' to remove, 'list' to list env vars"),
-		),
-		mcp.WithString("path",
-			mcp.Required(),
-			mcp.Description("Path to the function. Default is current directory ($FUNC_PATH)"),
-		),
-
-		// Optional flags
-		mcp.WithString("name", mcp.Description("Name of the environment variable.")),
-		mcp.WithString("value", mcp.Description("Value of the environment variable.")),
-		mcp.WithBoolean("verbose", mcp.Description("Print verbose logs ($FUNC_VERBOSE)")),
-	)
+func (t configEnvs) desc() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "config_envs",
+		Description: "Lists and manages environment variables for a function",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"action": map[string]interface{}{
+					"type":        "string",
+					"description": "The action to perform: 'add' to add an env var, 'remove' to remove, 'list' to list env vars",
+				},
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Path to the function. Default is current directory ($FUNC_PATH)",
+				},
+				"name":    map[string]interface{}{"type": "string", "description": "Name of the environment variable."},
+				"value":   map[string]interface{}{"type": "string", "description": "Value of the environment variable."},
+				"verbose": map[string]interface{}{"type": "boolean", "description": "Print verbose logs ($FUNC_VERBOSE)"},
+			},
+			"required": []string{"action", "path"},
+		},
+	}
 }
 
-func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
-	action, err := request.RequireString("action")
+func (t configEnvs) handle(ctx context.Context, request *mcp.CallToolRequest, cmdPrefix string, executor Executor) (*mcp.CallToolResult, error) {
+	action, err := requireString(request, "action")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
-	path, err := request.RequireString("path")
+	path, err := requireString(request, "path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return errorResult(err.Error()), nil
 	}
 
 	// Handle 'list' action separately
 	if action == "list" {
 		args := []string{"config", "envs", "--path", path}
-		if request.GetBool("verbose", false) {
+		if getBool(request, "verbose", false) {
 			args = append(args, "--verbose")
 		}
 
@@ -662,23 +795,23 @@ func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmd
 		cmdParts = append(cmdParts, args...)
 		out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("func config envs list failed: %s", out)), nil
+			return errorResult(fmt.Sprintf("func config envs list failed: %s", out)), nil
 		}
 		body := fmt.Sprintf(`{"result": "%s"}`, out)
-		return mcp.NewToolResultText(body), nil
+		return textResult(body), nil
 	}
 
 	// Handle 'add' and 'remove' actions
 	args := []string{"config", "envs", action, "--path", path}
 
 	// Optional flags
-	if name := request.GetString("name", ""); name != "" {
+	if name := getString(request, "name", ""); name != "" {
 		args = append(args, "--name", name)
 	}
-	if value := request.GetString("value", ""); value != "" {
+	if value := getString(request, "value", ""); value != "" {
 		args = append(args, "--value", value)
 	}
-	if request.GetBool("verbose", false) {
+	if getBool(request, "verbose", false) {
 		args = append(args, "--verbose")
 	}
 
@@ -688,11 +821,11 @@ func (t configEnvs) handle(ctx context.Context, request mcp.CallToolRequest, cmd
 
 	out, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("func config envs %s failed: %s", action, out)), nil
+		return errorResult(fmt.Sprintf("func config envs %s failed: %s", action, out)), nil
 	}
 
 	body := fmt.Sprintf(`{"result": "%s"}`, out)
-	return mcp.NewToolResultText(body), nil
+	return textResult(body), nil
 }
 
 // parseCommand splits a command string like "kn func" into its parts

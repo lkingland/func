@@ -3,8 +3,7 @@ package mcp
 import (
 	"context"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var templateRepos = []string{
@@ -12,7 +11,7 @@ var templateRepos = []string{
 }
 
 type Server struct {
-	impl      *server.MCPServer
+	impl      *mcp.Server
 	prefix    string   // Command prefix to use (e.g., "func" or "kn func")
 	executor  Executor // Command executor for this server instance
 	tools     []tool
@@ -20,13 +19,13 @@ type Server struct {
 }
 
 type tool interface {
-	desc() mcp.Tool
-	handle(context.Context, mcp.CallToolRequest, string, Executor) (*mcp.CallToolResult, error)
+	desc() *mcp.Tool
+	handle(context.Context, *mcp.CallToolRequest, string, Executor) (*mcp.CallToolResult, error)
 }
 
 type resource interface {
-	desc() mcp.Resource
-	handler(prefix string) server.ResourceHandlerFunc
+	desc() *mcp.Resource
+	handler(prefix string) mcp.ResourceHandler
 }
 
 // Option is a functional option for configuring a Server
@@ -46,13 +45,17 @@ func WithExecutor(executor Executor) Option {
 	}
 }
 
+// DefaultCommand is the default function command to use when executing.
+const DefaultCommand = "func"
+
 func New(options ...Option) *Server {
 	s := &Server{
-		prefix:   "func",         // Default prefix
+		prefix:   DefaultCommand, // Default prefix
 		executor: realExecutor{}, // Default executor
-		impl: server.NewMCPServer("func-mcp", "1.0.0",
-			server.WithToolCapabilities(true),
-		),
+		impl: mcp.NewServer(&mcp.Implementation{
+			Name:    "func-mcp",
+			Version: "1.0.0",
+		}, nil),
 		tools: []tool{
 			healthCheck{},
 			create{},
@@ -94,29 +97,35 @@ func New(options ...Option) *Server {
 		s.impl.AddResource(resource.desc(), resource.handler(s.prefix))
 	}
 
-	s.impl.AddPrompt(mcp.NewPrompt("help",
-		mcp.WithPromptDescription("help prompt for the root command"),
-	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	s.impl.AddPrompt(&mcp.Prompt{
+		Name:        "help",
+		Description: "help prompt for the root command",
+	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		return handleRootHelpPrompt(ctx, request, s.prefix)
 	})
 
-	s.impl.AddPrompt(mcp.NewPrompt("cmd_help",
-		mcp.WithPromptDescription("help prompt for a specific command"),
-		mcp.WithArgument("cmd",
-			mcp.ArgumentDescription("The command for which help is requested"),
-			mcp.RequiredArgument(),
-		),
-	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	s.impl.AddPrompt(&mcp.Prompt{
+		Name:        "cmd_help",
+		Description: "help prompt for a specific command",
+		Arguments: []*mcp.PromptArgument{
+			{
+				Name:        "cmd",
+				Description: "The command for which help is requested",
+				Required:    true,
+			},
+		},
+	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		return handleCmdHelpPrompt(ctx, request, s.prefix)
 	})
 
-	s.impl.AddPrompt(mcp.NewPrompt("list_templates",
-		mcp.WithPromptDescription("prompt to list available function templates"),
-	), handleListTemplatesPrompt)
+	s.impl.AddPrompt(&mcp.Prompt{
+		Name:        "list_templates",
+		Description: "prompt to list available function templates",
+	}, handleListTemplatesPrompt)
 
 	return s
 }
 
 func (s *Server) Start() error {
-	return server.ServeStdio(s.impl)
+	return s.impl.Run(context.Background(), &mcp.StdioTransport{})
 }
