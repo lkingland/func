@@ -16,6 +16,7 @@ type Server struct {
 	executor  Executor // Command executor for this server instance
 	tools     []tool
 	resources []resource
+	prompts   []prompt
 }
 
 type tool interface {
@@ -26,6 +27,11 @@ type tool interface {
 type resource interface {
 	desc() *mcp.Resource
 	handler(prefix string) mcp.ResourceHandler
+}
+
+type prompt interface {
+	desc() *mcp.Prompt
+	handler(prefix string) mcp.PromptHandler
 }
 
 // Option is a functional option for configuring a Server
@@ -50,8 +56,8 @@ const DefaultCommand = "func"
 
 func New(options ...Option) *Server {
 	s := &Server{
-		prefix:   DefaultCommand, // Default prefix
-		executor: realExecutor{}, // Default executor
+		prefix:   DefaultCommand,   // Default prefix
+		executor: binaryExecutor{}, // Default executor
 		impl: mcp.NewServer(&mcp.Implementation{
 			Name:    "func-mcp",
 			Version: "1.0.0",
@@ -82,6 +88,11 @@ func New(options ...Option) *Server {
 			cmdHelpResource{[]string{"config", "envs", "remove"}, "func://config/envs/remove/docs"},
 			templatesResource{},
 		},
+		prompts: []prompt{
+			helpPrompt{},
+			cmdHelpPrompt{},
+			listTemplatesPrompt{},
+		},
 	}
 
 	// Apply functional options
@@ -97,31 +108,9 @@ func New(options ...Option) *Server {
 		s.impl.AddResource(resource.desc(), resource.handler(s.prefix))
 	}
 
-	s.impl.AddPrompt(&mcp.Prompt{
-		Name:        "help",
-		Description: "help prompt for the root command",
-	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		return handleRootHelpPrompt(ctx, request, s.prefix)
-	})
-
-	s.impl.AddPrompt(&mcp.Prompt{
-		Name:        "cmd_help",
-		Description: "help prompt for a specific command",
-		Arguments: []*mcp.PromptArgument{
-			{
-				Name:        "cmd",
-				Description: "The command for which help is requested",
-				Required:    true,
-			},
-		},
-	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		return handleCmdHelpPrompt(ctx, request, s.prefix)
-	})
-
-	s.impl.AddPrompt(&mcp.Prompt{
-		Name:        "list_templates",
-		Description: "prompt to list available function templates",
-	}, handleListTemplatesPrompt)
+	for _, prompt := range s.prompts {
+		s.impl.AddPrompt(prompt.desc(), prompt.handler(s.prefix))
+	}
 
 	return s
 }

@@ -42,4 +42,9 @@ func TestServerCreation(t *testing.T) {
 	if len(server.resources) != 13 {
 		t.Errorf("expected 13 resources, got %d", len(server.resources))
 	}
+
+	// Verify prompts were registered
+	if len(server.prompts) != 3 {
+		t.Errorf("expected 3 prompts, got %d", len(server.prompts))
+	}
 }

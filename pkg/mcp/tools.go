@@ -16,10 +16,10 @@ type Executor interface {
 	Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
 }
 
-// realExecutor implements Executor using os/exec
-type realExecutor struct{}
+// binaryExecutor implements Executor using os/exec
+type binaryExecutor struct{}
 
-func (e realExecutor) Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+func (e binaryExecutor) Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if dir != "" {
 		cmd.Dir = dir
@@ -243,25 +243,25 @@ func (t deploy) desc() *mcp.Tool {
 					"type":        "string",
 					"description": "Builder to be used to build the function image",
 				},
-				"image":                 map[string]interface{}{"type": "string", "description": "Full image name (overrides registry)"},
-				"namespace":             map[string]interface{}{"type": "string", "description": "Namespace to deploy the function into"},
-				"git-url":               map[string]interface{}{"type": "string", "description": "Git URL containing the function source"},
-				"git-branch":            map[string]interface{}{"type": "string", "description": "Git branch for remote deployment"},
-				"git-dir":               map[string]interface{}{"type": "string", "description": "Directory inside the Git repository"},
-				"builder-image":         map[string]interface{}{"type": "string", "description": "Custom builder image"},
-				"domain":                map[string]interface{}{"type": "string", "description": "Domain for the function route"},
-				"platform":              map[string]interface{}{"type": "string", "description": "Target platform to build for (e.g., linux/amd64)"},
-				"path":                  map[string]interface{}{"type": "string", "description": "Path to the function directory"},
-				"build":                 map[string]interface{}{"type": "string", "description": `Build control: "true", "false", or "auto"`},
-				"pvc-size":              map[string]interface{}{"type": "string", "description": "Custom volume size for remote builds"},
-				"service-account":       map[string]interface{}{"type": "string", "description": "Kubernetes ServiceAccount to use"},
-				"remote-storage-class":  map[string]interface{}{"type": "string", "description": "Storage class for remote volume"},
-				"confirm":               map[string]interface{}{"type": "boolean", "description": "Prompt for confirmation before deploying"},
-				"push":                  map[string]interface{}{"type": "boolean", "description": "Push image to registry before deployment"},
-				"verbose":               map[string]interface{}{"type": "boolean", "description": "Print verbose logs"},
-				"registry-insecure":     map[string]interface{}{"type": "boolean", "description": "Skip TLS verification for registry"},
-				"build-timestamp":       map[string]interface{}{"type": "boolean", "description": "Use actual time in image metadata"},
-				"remote":                map[string]interface{}{"type": "boolean", "description": "Trigger remote deployment"},
+				"image":                map[string]interface{}{"type": "string", "description": "Full image name (overrides registry)"},
+				"namespace":            map[string]interface{}{"type": "string", "description": "Namespace to deploy the function into"},
+				"git-url":              map[string]interface{}{"type": "string", "description": "Git URL containing the function source"},
+				"git-branch":           map[string]interface{}{"type": "string", "description": "Git branch for remote deployment"},
+				"git-dir":              map[string]interface{}{"type": "string", "description": "Directory inside the Git repository"},
+				"builder-image":        map[string]interface{}{"type": "string", "description": "Custom builder image"},
+				"domain":               map[string]interface{}{"type": "string", "description": "Domain for the function route"},
+				"platform":             map[string]interface{}{"type": "string", "description": "Target platform to build for (e.g., linux/amd64)"},
+				"path":                 map[string]interface{}{"type": "string", "description": "Path to the function directory"},
+				"build":                map[string]interface{}{"type": "string", "description": `Build control: "true", "false", or "auto"`},
+				"pvc-size":             map[string]interface{}{"type": "string", "description": "Custom volume size for remote builds"},
+				"service-account":      map[string]interface{}{"type": "string", "description": "Kubernetes ServiceAccount to use"},
+				"remote-storage-class": map[string]interface{}{"type": "string", "description": "Storage class for remote volume"},
+				"confirm":              map[string]interface{}{"type": "boolean", "description": "Prompt for confirmation before deploying"},
+				"push":                 map[string]interface{}{"type": "boolean", "description": "Push image to registry before deployment"},
+				"verbose":              map[string]interface{}{"type": "boolean", "description": "Print verbose logs"},
+				"registry-insecure":    map[string]interface{}{"type": "boolean", "description": "Skip TLS verification for registry"},
+				"build-timestamp":      map[string]interface{}{"type": "boolean", "description": "Use actual time in image metadata"},
+				"remote":               map[string]interface{}{"type": "boolean", "description": "Trigger remote deployment"},
 			},
 			"required": []string{"cwd", "registry", "builder"},
 		},
