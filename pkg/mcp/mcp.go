@@ -21,6 +21,11 @@ type tool interface {
 	handle(context.Context, mcp.CallToolRequest, string) (*mcp.CallToolResult, error)
 }
 
+type resource interface {
+	desc() mcp.Resource
+	handler(prefix string) server.ResourceHandlerFunc
+}
+
 var tools = []tool{
 	healthCheck{},
 	create{},
@@ -31,6 +36,22 @@ var tools = []tool{
 	configVolumes{},
 	configLabels{},
 	configEnvs{},
+}
+
+var resources = []resource{
+	rootHelpResource{},
+	cmdHelpResource{[]string{"create"}, "func://create/docs"},
+	cmdHelpResource{[]string{"build"}, "func://build/docs"},
+	cmdHelpResource{[]string{"deploy"}, "func://deploy/docs"},
+	cmdHelpResource{[]string{"list"}, "func://list/docs"},
+	cmdHelpResource{[]string{"delete"}, "func://delete/docs"},
+	cmdHelpResource{[]string{"config", "volumes", "add"}, "func://config/volumes/add/docs"},
+	cmdHelpResource{[]string{"config", "volumes", "remove"}, "func://config/volumes/remove/docs"},
+	cmdHelpResource{[]string{"config", "labels", "add"}, "func://config/labels/add/docs"},
+	cmdHelpResource{[]string{"config", "labels", "remove"}, "func://config/labels/remove/docs"},
+	cmdHelpResource{[]string{"config", "envs", "add"}, "func://config/envs/add/docs"},
+	cmdHelpResource{[]string{"config", "envs", "remove"}, "func://config/envs/remove/docs"},
+	templatesResource{},
 }
 
 func New(cmdPrefix string) *Server {
@@ -48,122 +69,9 @@ func New(cmdPrefix string) *Server {
 		s.impl.AddTool(tool.desc(), withPrefix(s.cmdPrefix, tool.handle))
 	}
 
-	s.impl.AddResource(mcp.NewResource(
-		"func://docs",
-		"Root Help Command",
-		mcp.WithResourceDescription("--help output of the func command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return handleRootHelpResource(ctx, request, s.cmdPrefix)
-	})
-
-	// Static help resources for each command
-	s.impl.AddResource(mcp.NewResource(
-		"func://create/docs",
-		"Create Command Help",
-		mcp.WithResourceDescription("--help output of the 'create' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"create"}, "func://create/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://build/docs",
-		"Build Command Help",
-		mcp.WithResourceDescription("--help output of the 'build' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"build"}, "func://build/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://deploy/docs",
-		"Deploy Command Help",
-		mcp.WithResourceDescription("--help output of the 'deploy' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"deploy"}, "func://deploy/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://list/docs",
-		"List Command Help",
-		mcp.WithResourceDescription("--help output of the 'list' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"list"}, "func://list/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://delete/docs",
-		"Delete Command Help",
-		mcp.WithResourceDescription("--help output of the 'delete' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"delete"}, "func://delete/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://config/volumes/add/docs",
-		"Config Volumes Add Command Help",
-		mcp.WithResourceDescription("--help output of the 'config volumes add' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "volumes", "add"}, "func://config/volumes/add/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://config/volumes/remove/docs",
-		"Config Volumes Remove Command Help",
-		mcp.WithResourceDescription("--help output of the 'config volumes remove' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "volumes", "remove"}, "func://config/volumes/remove/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://config/labels/add/docs",
-		"Config Labels Add Command Help",
-		mcp.WithResourceDescription("--help output of the 'config labels add' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "labels", "add"}, "func://config/labels/add/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://config/labels/remove/docs",
-		"Config Labels Remove Command Help",
-		mcp.WithResourceDescription("--help output of the 'config labels remove' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "labels", "remove"}, "func://config/labels/remove/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://config/envs/add/docs",
-		"Config Envs Add Command Help",
-		mcp.WithResourceDescription("--help output of the 'config envs add' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "envs", "add"}, "func://config/envs/add/docs", s.cmdPrefix)
-	})
-
-	s.impl.AddResource(mcp.NewResource(
-		"func://config/envs/remove/docs",
-		"Config Envs Remove Command Help",
-		mcp.WithResourceDescription("--help output of the 'config envs remove' command"),
-		mcp.WithMIMEType("text/plain"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-		return runHelpCommand([]string{"config", "envs", "remove"}, "func://config/envs/remove/docs", s.cmdPrefix)
-	})
-
-	// Static resource for listing available templates
-	s.impl.AddResource(mcp.NewResource(
-		"func://templates",
-		"Available Templates",
-		mcp.WithResourceDescription("List of available function templates"),
-		mcp.WithMIMEType("plain/text"),
-	), handleListTemplatesResource)
+	for _, resource := range resources {
+		s.impl.AddResource(resource.desc(), resource.handler(s.cmdPrefix))
+	}
 
 	s.impl.AddPrompt(mcp.NewPrompt("help",
 		mcp.WithPromptDescription("help prompt for the root command"),

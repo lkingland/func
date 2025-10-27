@@ -60,10 +60,6 @@ func (t create) handle(ctx context.Context, request mcp.CallToolRequest, cmdPref
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	name, err := request.RequireString("name")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
 	language, err := request.RequireString("language")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 type template struct {
@@ -193,4 +194,92 @@ func handleListTemplatesPrompt(ctx context.Context, request mcp.GetPromptRequest
 			),
 		},
 	), nil
+}
+
+// Resource handler types
+type resourceHandlerFunc func(context.Context, mcp.ReadResourceRequest, string) ([]mcp.ResourceContents, error)
+
+func withResourcePrefix(prefix string, impl resourceHandlerFunc) server.ResourceHandlerFunc {
+	return func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		return impl(ctx, request, prefix)
+	}
+}
+
+// rootHelpResource
+type rootHelpResource struct{}
+
+func (r rootHelpResource) desc() mcp.Resource {
+	return mcp.NewResource(
+		"func://docs",
+		"Root Help Command",
+		mcp.WithResourceDescription("--help output of the func command"),
+		mcp.WithMIMEType("text/plain"),
+	)
+}
+
+func (r rootHelpResource) handler(prefix string) server.ResourceHandlerFunc {
+	return withResourcePrefix(prefix, r.handle)
+}
+
+func (r rootHelpResource) handle(ctx context.Context, request mcp.ReadResourceRequest, cmdPrefix string) ([]mcp.ResourceContents, error) {
+	return handleRootHelpResource(ctx, request, cmdPrefix)
+}
+
+// cmdHelpResource - reusable for command help docs
+type cmdHelpResource struct {
+	cmd []string
+	uri string
+}
+
+func (r cmdHelpResource) desc() mcp.Resource {
+	// Extract command name from URI for description
+	var desc string
+	if len(r.cmd) == 1 {
+		desc = fmt.Sprintf("--help output of the '%s' command", r.cmd[0])
+	} else {
+		desc = fmt.Sprintf("--help output of the '%s' command", strings.Join(r.cmd, " "))
+	}
+
+	// Extract title from command
+	var title string
+	if len(r.cmd) == 1 {
+		title = strings.Title(r.cmd[0]) + " Command Help"
+	} else {
+		parts := make([]string, len(r.cmd))
+		for i, part := range r.cmd {
+			parts[i] = strings.Title(part)
+		}
+		title = strings.Join(parts, " ") + " Command Help"
+	}
+
+	return mcp.NewResource(
+		r.uri,
+		title,
+		mcp.WithResourceDescription(desc),
+		mcp.WithMIMEType("text/plain"),
+	)
+}
+
+func (r cmdHelpResource) handler(prefix string) server.ResourceHandlerFunc {
+	return withResourcePrefix(prefix, r.handle)
+}
+
+func (r cmdHelpResource) handle(ctx context.Context, request mcp.ReadResourceRequest, cmdPrefix string) ([]mcp.ResourceContents, error) {
+	return runHelpCommand(r.cmd, r.uri, cmdPrefix)
+}
+
+// templatesResource
+type templatesResource struct{}
+
+func (r templatesResource) desc() mcp.Resource {
+	return mcp.NewResource(
+		"func://templates",
+		"Available Templates",
+		mcp.WithResourceDescription("List of available function templates"),
+		mcp.WithMIMEType("plain/text"),
+	)
+}
+
+func (r templatesResource) handler(_ string) server.ResourceHandlerFunc {
+	return handleListTemplatesResource
 }
