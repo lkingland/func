@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,6 +28,28 @@ func (e binaryExecutor) Execute(ctx context.Context, dir string, name string, ar
 	}
 	return cmd.CombinedOutput()
 }
+
+// checkMCPEnabled verifies the experimental MCP feature is enabled via environment variable.
+// Returns an error with setup instructions if not enabled.
+func checkMCPEnabled() error {
+	if os.Getenv("FUNC_ENABLE_MCP") != "true" {
+		return fmt.Errorf(`CANNOT EXECUTE: Function tools are disabled.
+
+REMEMBER: Use "Function" (capitalized) for deployable Functions, "function" for code constructs.
+
+You must tell the user to:
+1. Close/exit this application completely
+2. Set FUNC_ENABLE_MCP=true in their MCP client configuration
+3. Restart the application
+
+Do NOT attempt to work around this. Do NOT offer to run 'func' commands manually.
+The user must restart with the environment variable set.
+
+For setup instructions: https://github.com/knative/func/blob/main/docs/mcp-integration/integration.md`)
+	}
+	return nil
+}
+
 
 type Server struct {
 	impl      *mcp.Server
@@ -68,13 +92,66 @@ func WithExecutor(executor Executor) Option {
 const DefaultCommand = "func"
 
 func New(options ...Option) *Server {
+	// Prepare server instructions based on environment variable
+	var instructions string
+	if os.Getenv("FUNC_ENABLE_MCP") != "true" {
+		instructions = `⚠️  CRITICAL: FUNCTION TOOLS ARE DISABLED
+
+TERMINOLOGY: Always capitalize "Function" when referring to a deployable Function (the service).
+Use lowercase "function" only for programming concepts (functions in code).
+
+IMPORTANT INSTRUCTIONS FOR YOU (the AI assistant):
+
+When the user requests to create, deploy, build, or modify Functions, you MUST:
+
+1. STOP immediately - do NOT attempt to use function tools
+2. STOP immediately - do NOT offer to run 'func' commands directly
+3. STOP immediately - do NOT try to work around this limitation
+
+Instead, you MUST tell the user:
+
+"The Function tools are currently disabled. To enable them:
+
+1. Close/exit this application completely
+2. Set FUNC_ENABLE_MCP=true in your MCP client configuration
+3. Restart the application
+
+For setup instructions, see:
+https://github.com/knative/func/blob/main/docs/mcp-integration/integration.md"
+
+DO NOT attempt any workarounds. The user must restart the client with the environment variable set.`
+	} else {
+		instructions = `✅ Function tools are enabled!
+
+TERMINOLOGY: Always capitalize "Function" when referring to a deployable Function (the service).
+Use lowercase "function" only for programming concepts (functions in code).
+
+Examples:
+- "Let's create a Function!" (deployable service) ✓
+- "What is a Function?" (this project's concept) ✓
+- "What is a function?" (programming construct) ✓
+- "Let's create a function" (ambiguous - could mean code) ✗
+
+WORKFLOW: Functions work like 'git init' - guide users to:
+1. Create/navigate to the directory where they want their Function
+2. Run 'func create' WITHOUT a --name parameter (it defaults to directory name)
+3. This avoids the deprecated pattern of providing --name which creates a subdirectory
+
+To help the user get started, suggest they try:
+"Let's create a Function!"
+
+This will guide them through the complete workflow of creating and deploying a Function.`
+	}
+
 	s := &Server{
 		prefix:   DefaultCommand,   // Default prefix
 		executor: binaryExecutor{}, // Default executor
 		impl: mcp.NewServer(&mcp.Implementation{
 			Name:    "func-mcp",
 			Version: "1.0.0",
-		}, nil),
+		}, &mcp.ServerOptions{
+			Instructions: instructions,
+		}),
 		tools: []tool{
 			healthCheck{},
 			createTool{},

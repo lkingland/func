@@ -14,8 +14,8 @@ type createTool struct{}
 // CreateInput defines the input parameters for the create tool.
 // All optional fields use pointers so we can distinguish "not provided" from "explicitly set to default".
 type CreateInput struct {
-	Path       string  `json:"path" jsonschema:"required,description=Parent directory where function will be created"`
-	Name       string  `json:"name" jsonschema:"required,description=Name of the function to create"`
+	Path       string  `json:"path" jsonschema:"required,description=Directory where the Function will be created (should be the Function directory itself, like 'git init')"`
+	Name       *string `json:"name,omitempty" jsonschema:"description=Name of the Function (optional - defaults to directory name). DEPRECATED: providing a name creates a subdirectory; omit this to use current directory name."`
 	Language   string  `json:"language" jsonschema:"required,description=Language runtime to use,enum=node,enum=python,enum=go,enum=quarkus,enum=rust,enum=typescript,enum=springboot"`
 	Template   *string `json:"template,omitempty" jsonschema:"description=Function template (http or cloudevents)"`
 	Repository *string `json:"repository,omitempty" jsonschema:"description=Git repository URI containing custom templates"`
@@ -34,17 +34,17 @@ type CreateOutput struct {
 func (t createTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "create",
-		Description: "Creates a new function project in the specified directory. The function will be created as a subdirectory with the given name.",
+		Description: "Creates a new Function project. Like 'git init', the Function is created in the specified directory. The Function name defaults to the directory name. Omit the explicit 'name' parameter to use the git-like workflow (recommended).",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Parent directory where function will be created (must exist)",
+					"description": "Directory where the Function will be created (should be the Function directory itself, like 'git init')",
 				},
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Name of the function to create",
+					"description": "Name of the Function (optional - defaults to directory name). DEPRECATED: providing a name creates a subdirectory; omit this to use current directory name.",
 				},
 				"language": map[string]any{
 					"type":        "string",
@@ -68,7 +68,7 @@ func (t createTool) desc() *mcp.Tool {
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"path", "name", "language"},
+			"required": []string{"path", "language"},
 		},
 	}
 }
@@ -94,8 +94,16 @@ func (t createTool) handle(ctx context.Context, request toolRequestInterface, cm
 	args = appendBoolFlag(args, "--confirm", input.Confirm)
 	args = appendBoolFlag(args, "--verbose", input.Verbose)
 
-	// Name is a positional argument
-	args = append(args, input.Name)
+	// Name is a positional argument - only add if provided (deprecated usage)
+	// When omitted, the Function name defaults to the directory name
+	var functionName string
+	if input.Name != nil && *input.Name != "" {
+		args = append(args, *input.Name)
+		functionName = *input.Name
+	} else {
+		// No name provided - use directory name (git-like workflow)
+		functionName = filepath.Base(input.Path)
+	}
 
 	// Parse command prefix and execute
 	cmdParts := parseCommand(cmdPrefix)
@@ -108,8 +116,8 @@ func (t createTool) handle(ctx context.Context, request toolRequestInterface, cm
 
 	// Build structured output
 	result := CreateOutput{
-		FunctionPath: filepath.Join(input.Path, input.Name),
-		Name:         input.Name,
+		FunctionPath: input.Path, // Function is created in the specified path
+		Name:         functionName,
 		Runtime:      input.Language,
 		Message:      string(output),
 	}

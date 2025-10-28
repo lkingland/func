@@ -16,6 +16,10 @@ type toolHandlerFunc func(context.Context, toolRequestInterface, string, Executo
 // with creates a mcp.ToolHandler that injects the prefix and executor
 func with(prefix string, executor Executor, impl toolHandlerFunc) mcp.ToolHandler {
 	return func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		// Gate all tool interactions behind environment variable check
+		if err := checkMCPEnabled(); err != nil {
+			return errorResult(err.Error()), nil
+		}
 		// Convert *mcp.CallToolRequest to toolRequestInterface
 		// Both types implement GetParams(), so this works transparently
 		return impl(ctx, request, prefix, executor)

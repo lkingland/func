@@ -77,13 +77,13 @@ func (p createFunctionPrompt) handle(ctx context.Context, request *mcp.GetPrompt
 		{
 			Role: "user",
 			Content: &mcp.TextContent{
-				Text: "I want to create a new function and deploy it to my cluster.",
+				Text: "I want to create a new Function and deploy it to my cluster.",
 			},
 		},
 		{
 			Role: "assistant",
 			Content: &mcp.TextContent{
-				Text: fmt.Sprintf("I'll guide you through creating and deploying a new function using %s. Let's start by setting up your function directory.\n\nFirst, create or navigate to a directory for your function:\n```bash\nmkdir my-function && cd my-function\n```", cmdPrefix),
+				Text: fmt.Sprintf("I'll guide you through creating and deploying a new Function using %s.\n\nIMPORTANT: Like 'git init', you should be IN the directory where you want your Function to live. The Function name will default to your directory name.\n\nCreate and navigate to your Function directory:\n```bash\nmkdir my-function && cd my-function\n```\n\nThe Function will be named 'my-function' (from the directory name).", cmdPrefix),
 			},
 		},
 		{
@@ -114,14 +114,14 @@ func (p createFunctionPrompt) handle(ctx context.Context, request *mcp.GetPrompt
 		messages = append(messages, &mcp.PromptMessage{
 			Role: "assistant",
 			Content: &mcp.TextContent{
-				Text: fmt.Sprintf("Use the 'create' tool to initialize your function. For example, to create a Go HTTP function:\n```bash\n%s create --language go --template http\n```", cmdPrefix),
+				Text: fmt.Sprintf("Use the 'create' tool to initialize your Function. For example, to create a Go HTTP Function:\n```bash\n%s create --language go --template http\n```\n\nNote: No --name needed! It will use your directory name.", cmdPrefix),
 			},
 		})
 	} else {
 		messages = append(messages, &mcp.PromptMessage{
 			Role: "assistant",
 			Content: &mcp.TextContent{
-				Text: fmt.Sprintf("I'll help you create a %s function with the '%s' template. Run:\n```bash\n%s create --language %s --template %s\n```", language, template, cmdPrefix, language, template),
+				Text: fmt.Sprintf("I'll help you create a %s Function with the '%s' template.\n\nRun this in your Function directory:\n```bash\n%s create --language %s --template %s\n```\n\nThe Function name will default to your directory name.", language, template, cmdPrefix, language, template),
 			},
 		})
 	}
