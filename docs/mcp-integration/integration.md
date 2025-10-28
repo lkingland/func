@@ -31,7 +31,7 @@ Base config to add:
 ```json
 {
   "mcpServers": {
-    "func-mcp": {
+    "func": {
       "command": "func",
       "args": ["mcp", "start"]
     }
@@ -106,6 +106,19 @@ If both exist, local/project config usually overrides global config.
 
 ---
 
+## Claude Code
+
+Run:
+```bash
+claude mcp add func func mcp start
+```
+
+Confirm the MCP server is started by running claude and issuing command:
+```
+/mcp
+```
+
+
 ## Claude Desktop
 
 **Config file location:**
@@ -175,7 +188,7 @@ For example:
 {
   // other VS Code settings...
   "mcpServers": {
-    "func-mcp": {
+    "func": {
       "command": "func",
       "args": ["mcp", "start"]
     }

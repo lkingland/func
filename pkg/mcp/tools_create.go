@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -14,37 +13,37 @@ type createTool struct{}
 // CreateInput defines the input parameters for the create tool.
 // All optional fields use pointers so we can distinguish "not provided" from "explicitly set to default".
 type CreateInput struct {
-	Path       string  `json:"path" jsonschema:"required,description=Directory where the Function will be created (should be the Function directory itself, like 'git init')"`
-	Name       *string `json:"name,omitempty" jsonschema:"description=Name of the Function (optional - defaults to directory name). DEPRECATED: providing a name creates a subdirectory; omit this to use current directory name."`
+	Path       string  `json:"path" jsonschema:"required,description=Path to the function project directory (must exist and contain func.yaml)"`
+	Name       string  `json:"name" jsonschema:"required,description=Name of the function to create"`
 	Language   string  `json:"language" jsonschema:"required,description=Language runtime to use,enum=node,enum=python,enum=go,enum=quarkus,enum=rust,enum=typescript,enum=springboot"`
-	Template   *string `json:"template,omitempty" jsonschema:"description=Function template (http or cloudevents)"`
+	Template   *string `json:"template,omitempty" jsonschema:"description=Function template (default http),enum=http,enum=cloudevent"`
 	Repository *string `json:"repository,omitempty" jsonschema:"description=Git repository URI containing custom templates"`
-	Confirm    *bool   `json:"confirm,omitempty" jsonschema:"description=Prompt to confirm before creating"`
+	Confirm    *bool   `json:"confirm,omitempty" jsonschema:"description=Prompt for confirmation before proceeding"`
 	Verbose    *bool   `json:"verbose,omitempty" jsonschema:"description=Enable verbose logging output"`
 }
 
 // CreateOutput defines the structured output returned by the create tool.
 type CreateOutput struct {
-	FunctionPath string `json:"functionPath" jsonschema:"description=Full path to the created function"`
-	Name         string `json:"name" jsonschema:"description=Name of the created function"`
-	Runtime      string `json:"runtime" jsonschema:"description=Language runtime used"`
-	Message      string `json:"message,omitempty" jsonschema:"description=Output message from func command"`
+	Runtime  string  `json:"runtime" jsonschema:"description=Language runtime used"`
+	Template *string `json:"template" jsonschema:"description=Template used"`
+	Message  string  `json:"message,omitempty" jsonschema:"description=Output message from func command"`
 }
 
 func (t createTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "create",
-		Description: "Creates a new Function project. Like 'git init', the Function is created in the specified directory. The Function name defaults to the directory name. Omit the explicit 'name' parameter to use the git-like workflow (recommended).",
+		Title:       "Create Function",
+		Description: "Initialize a new Function project in the current directory (like 'git init'). Function name defaults to directory name.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Directory where the Function will be created (should be the Function directory itself, like 'git init')",
+					"description": "Path to the function project directory (must exist and contain func.yaml)",
 				},
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Name of the Function (optional - defaults to directory name). DEPRECATED: providing a name creates a subdirectory; omit this to use current directory name.",
+					"description": "Name of the function to create",
 				},
 				"language": map[string]any{
 					"type":        "string",
@@ -61,14 +60,14 @@ func (t createTool) desc() *mcp.Tool {
 				},
 				"confirm": map[string]any{
 					"type":        "boolean",
-					"description": "Prompt to confirm before creating",
+					"description": "Prompt for confirmation before proceeding",
 				},
 				"verbose": map[string]any{
 					"type":        "boolean",
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"path", "language"},
+			"required": []string{"path", "name", "language"},
 		},
 	}
 }
@@ -80,9 +79,9 @@ func (t createTool) handle(ctx context.Context, request toolRequestInterface, cm
 		return errorResult(fmt.Sprintf("Invalid input: %v", err)), nil
 	}
 
-	// Validate parent path exists (simple filesystem check)
+	// Validate path exists
 	if err := validatePathExists(input.Path); err != nil {
-		return errorResult(err.Error()), nil
+		return errorResult(fmt.Sprintf("Invalid path: %v", err)), nil
 	}
 
 	// Build command with only provided flags
@@ -94,16 +93,8 @@ func (t createTool) handle(ctx context.Context, request toolRequestInterface, cm
 	args = appendBoolFlag(args, "--confirm", input.Confirm)
 	args = appendBoolFlag(args, "--verbose", input.Verbose)
 
-	// Name is a positional argument - only add if provided (deprecated usage)
-	// When omitted, the Function name defaults to the directory name
-	var functionName string
-	if input.Name != nil && *input.Name != "" {
-		args = append(args, *input.Name)
-		functionName = *input.Name
-	} else {
-		// No name provided - use directory name (git-like workflow)
-		functionName = filepath.Base(input.Path)
-	}
+	// Add function name as positional argument
+	args = append(args, input.Name)
 
 	// Parse command prefix and execute
 	cmdParts := parseCommand(cmdPrefix)
@@ -116,10 +107,9 @@ func (t createTool) handle(ctx context.Context, request toolRequestInterface, cm
 
 	// Build structured output
 	result := CreateOutput{
-		FunctionPath: input.Path, // Function is created in the specified path
-		Name:         functionName,
-		Runtime:      input.Language,
-		Message:      string(output),
+		Runtime:  input.Language,
+		Template: input.Template,
+		Message:  string(output),
 	}
 
 	return jsonResult(result), nil

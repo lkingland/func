@@ -27,13 +27,20 @@ DESCRIPTION
 
 	"Let's create a Function!".
 
-	IMPORTANT: This is an EXPERIMENTAL feature. The FUNC_ENABLE_MCP environment
-	variable must be set before the server will take any meaninigful action.
+	Please note this is an experimental feature, and using an LLM to create
+	and modify code running on your cluster requires careful supervision.
+	Functions is an inherently "mutative" tool, so enabling it for your LLM
+	is essentially giving (sometimes unpredictable) AI the ability to create,
+	modify and delete Function instances on your currently connected cluster.
+	Please set FUNC_ENABLE_MCP to acknowledge this warning and enable the
+	server.
 
-	IMPORTANT: "{{rootCmdUse}} mcp start" is designed to be invoked by MCP
-	clients (such as Claude Code, Cursor, VS Code, Windsurf, etc.).  Do not run
-	this directly. Instead, configure your client to invoke.  For setup
-	instructions and client configuration examples, see:
+	The command "{{rootCmdUse}} mcp start" is be invoked by your MCP client
+	(such as Claude Code, Cursor, VS Code, Windsurf, etc.); not run directly.
+	Configure your client of choice with a new MCP server which runs this
+	command.  For example, in Claude Code this can be accomplished with:
+		claude mcp add func func mcp start
+	Instructions for other clients can be found at:
 	https://github.com/knative/func/blob/main/docs/mcp-integration/integration.md
 
 AVAILABLE COMMANDS
@@ -66,14 +73,12 @@ SYNOPSIS
 DESCRIPTION
 	Starts the Model Context Protocol (MCP) server.
 
-	IMPORTANT: This command is designed to be invoked by MCP clients (such as
-	Claude Desktop, Cursor, VS Code, Windsurf, etc.), not run directly.
+	This command is designed to be invoked by MCP clients directly
+	(such as Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, etc.);
+	not run directly.
 
-	IMPORTANT:
-	- The FUNC_ENABLE_MCP environment variable must be set to "true"
-
-	For detailed setup instructions and client configuration examples, see:
-	https://github.com/knative/func/blob/main/docs/mcp-integration/integration.md
+	Please see '{{rootCMdUse}} mcp --help' for more information and
+	important warnings.
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runMCPServer(cmd, args)

@@ -19,7 +19,7 @@ type rootHelpResource struct{}
 
 func (r rootHelpResource) desc() *mcp.Resource {
 	return &mcp.Resource{
-		URI:         "function://help/root",
+		URI:         "func://help/root",
 		Name:        "Root Help",
 		Description: "--help output of the func command",
 		MIMEType:    "text/plain",
@@ -39,7 +39,7 @@ func (r rootHelpResource) handle(ctx context.Context, request *mcp.ReadResourceR
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
-				URI:      "function://help/root",
+				URI:      "func://help/root",
 				MIMEType: "text/plain",
 				Text:     string(content),
 			},
@@ -110,12 +110,45 @@ func (r cmdHelpResource) handle(ctx context.Context, request *mcp.ReadResourceRe
 	}, nil
 }
 
+// languagesResource
+type languagesResource struct{}
+
+func (r languagesResource) desc() *mcp.Resource {
+	return &mcp.Resource{
+		URI:         "func://languages",
+		Name:        "Available Languages",
+		Description: "List of available language runtimes",
+		MIMEType:    "text/plain",
+	}
+}
+
+func (r languagesResource) handle(ctx context.Context, request *mcp.ReadResourceRequest, cmdPrefix string, executor Executor) (*mcp.ReadResourceResult, error) {
+	// Parse the command prefix (might be "func" or "kn func")
+	cmdParts := strings.Fields(cmdPrefix)
+	cmdParts = append(cmdParts, "languages")
+
+	content, err := executor.Execute(ctx, "", cmdParts[0], cmdParts[1:]...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				URI:      "func://languages",
+				MIMEType: "text/plain",
+				Text:     string(content),
+			},
+		},
+	}, nil
+}
+
 // templatesResource
 type templatesResource struct{}
 
 func (r templatesResource) desc() *mcp.Resource {
 	return &mcp.Resource{
-		URI:         "function://templates",
+		URI:         "func://templates",
 		Name:        "Available Templates",
 		Description: "List of available function templates",
 		MIMEType:    "text/plain",
@@ -135,7 +168,7 @@ func (r templatesResource) handle(ctx context.Context, request *mcp.ReadResource
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
-				URI:      "function://templates",
+				URI:      "func://templates",
 				MIMEType: "text/plain",
 				Text:     string(content),
 			},
@@ -207,7 +240,7 @@ type currentFunctionResource struct{}
 
 func (r currentFunctionResource) desc() *mcp.Resource {
 	return &mcp.Resource{
-		URI:         "function://current",
+		URI:         "func://current",
 		Name:        "Current Function",
 		Description: "Current function configuration from working directory",
 		MIMEType:    "application/json",
@@ -222,7 +255,7 @@ func (r currentFunctionResource) handle(ctx context.Context, request *mcp.ReadRe
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{
 				{
-					URI:      "function://current",
+					URI:      "func://current",
 					MIMEType: "text/plain",
 					Text:     fmt.Sprintf("Error loading function: %v", err),
 				},
@@ -235,7 +268,7 @@ func (r currentFunctionResource) handle(ctx context.Context, request *mcp.ReadRe
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{
 				{
-					URI:      "function://current",
+					URI:      "func://current",
 					MIMEType: "text/plain",
 					Text:     "No Function in current directory (has one been created?)",
 				},
@@ -252,7 +285,7 @@ func (r currentFunctionResource) handle(ctx context.Context, request *mcp.ReadRe
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
-				URI:      "function://current",
+				URI:      "func://current",
 				MIMEType: "application/json",
 				Text:     string(data),
 			},

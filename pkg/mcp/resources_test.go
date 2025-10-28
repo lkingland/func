@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	fn "knative.dev/func/pkg/functions"
+	"knative.dev/func/pkg/mcp/mock"
 )
 
 func TestCurrentFunctionResource(t *testing.T) {
@@ -41,7 +42,7 @@ func TestCurrentFunctionResource(t *testing.T) {
 				}
 
 				cleanup := func() {
-					os.Chdir(originalDir)
+					_ = os.Chdir(originalDir)
 				}
 
 				return dir, cleanup
@@ -52,8 +53,8 @@ func TestCurrentFunctionResource(t *testing.T) {
 				}
 
 				content := result.Contents[0]
-				if content.URI != "function://current" {
-					t.Errorf("expected URI 'function://current', got %q", content.URI)
+				if content.URI != "func://current" {
+					t.Errorf("expected URI 'func://current', got %q", content.URI)
 				}
 				if content.MIMEType != "application/json" {
 					t.Errorf("expected MIMEType 'application/json', got %q", content.MIMEType)
@@ -88,7 +89,7 @@ func TestCurrentFunctionResource(t *testing.T) {
 				}
 
 				cleanup := func() {
-					os.Chdir(originalDir)
+					_ = os.Chdir(originalDir)
 				}
 
 				return dir, cleanup
@@ -99,8 +100,8 @@ func TestCurrentFunctionResource(t *testing.T) {
 				}
 
 				content := result.Contents[0]
-				if content.URI != "function://current" {
-					t.Errorf("expected URI 'function://current', got %q", content.URI)
+				if content.URI != "func://current" {
+					t.Errorf("expected URI 'func://current', got %q", content.URI)
 				}
 				if content.MIMEType != "text/plain" {
 					t.Errorf("expected MIMEType 'text/plain' for error, got %q", content.MIMEType)
@@ -127,7 +128,7 @@ func TestCurrentFunctionResource(t *testing.T) {
 
 			result, err := handler(context.Background(), &mcp.ReadResourceRequest{
 				Params: &mcp.ReadResourceParams{
-					URI: "function://current",
+					URI: "func://current",
 				},
 			})
 
@@ -149,8 +150,8 @@ func TestCurrentFunctionResourceDescriptor(t *testing.T) {
 	resource := currentFunctionResource{}
 	desc := resource.desc()
 
-	if desc.URI != "function://current" {
-		t.Errorf("expected URI 'function://current', got %q", desc.URI)
+	if desc.URI != "func://current" {
+		t.Errorf("expected URI 'func://current', got %q", desc.URI)
 	}
 	if desc.Name != "Current Function" {
 		t.Errorf("expected Name 'Current Function', got %q", desc.Name)
@@ -160,5 +161,62 @@ func TestCurrentFunctionResourceDescriptor(t *testing.T) {
 	}
 	if desc.MIMEType != "application/json" {
 		t.Errorf("expected MIMEType 'application/json', got %q", desc.MIMEType)
+	}
+}
+
+func TestLanguagesResource(t *testing.T) {
+	resource := languagesResource{}
+	executor := mock.NewExecutor()
+	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+		return []byte("go\nnode\npython\nquarkus\nrust\nspringboot\ntypescript\n"), nil
+	}
+	handler := withResourcePrefix("func", executor, resource.handle)
+
+	result, err := handler(context.Background(), &mcp.ReadResourceRequest{
+		Params: &mcp.ReadResourceParams{
+			URI: "func://languages",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("handler returned unexpected error: %v", err)
+	}
+
+	if len(result.Contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(result.Contents))
+	}
+
+	content := result.Contents[0]
+	if content.URI != "func://languages" {
+		t.Errorf("expected URI 'func://languages', got %q", content.URI)
+	}
+	if content.MIMEType != "text/plain" {
+		t.Errorf("expected MIMEType 'text/plain', got %q", content.MIMEType)
+	}
+
+	// Verify content includes expected languages
+	expectedLanguages := []string{"go", "node", "python", "quarkus", "rust", "springboot", "typescript"}
+	for _, lang := range expectedLanguages {
+		if !strings.Contains(content.Text, lang) {
+			t.Errorf("expected languages list to contain %q", lang)
+		}
+	}
+}
+
+func TestLanguagesResourceDescriptor(t *testing.T) {
+	resource := languagesResource{}
+	desc := resource.desc()
+
+	if desc.URI != "func://languages" {
+		t.Errorf("expected URI 'func://languages', got %q", desc.URI)
+	}
+	if desc.Name != "Available Languages" {
+		t.Errorf("expected Name 'Available Languages', got %q", desc.Name)
+	}
+	if desc.Description != "List of available language runtimes" {
+		t.Errorf("unexpected description: %s", desc.Description)
+	}
+	if desc.MIMEType != "text/plain" {
+		t.Errorf("expected MIMEType 'text/plain', got %q", desc.MIMEType)
 	}
 }

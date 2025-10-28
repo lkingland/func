@@ -12,8 +12,8 @@ type buildTool struct{}
 
 // BuildInput defines the input parameters for the build tool.
 // All optional fields use pointers so we can distinguish "not provided" from "explicitly set to default".
+// All operations occur in the current working directory.
 type BuildInput struct {
-	Path             string  `json:"path" jsonschema:"required,description=Path to the function project directory"`
 	Builder          *string `json:"builder,omitempty" jsonschema:"description=Builder to use (pack|s2i|host),enum=pack,enum=s2i,enum=host"`
 	Registry         *string `json:"registry,omitempty" jsonschema:"description=Container registry for function image (e.g. ghcr.io/user)"`
 	BuilderImage     *string `json:"builderImage,omitempty" jsonschema:"description=Custom builder image to use with buildpacks"`
@@ -35,14 +35,11 @@ type BuildOutput struct {
 func (t buildTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "build",
-		Description: "Builds a function container image.",
+		Title:       "Build Function",
+		Description: "Build the Function's container image in the current directory.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{
-					"type":        "string",
-					"description": "Path to the function project directory (must exist and contain func.yaml)",
-				},
 				"builder": map[string]any{
 					"type":        "string",
 					"description": "Builder to use (pack, s2i, or host)",
@@ -85,7 +82,6 @@ func (t buildTool) desc() *mcp.Tool {
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"path"},
 		},
 	}
 }
@@ -97,12 +93,7 @@ func (t buildTool) handle(ctx context.Context, request toolRequestInterface, cmd
 		return errorResult(fmt.Sprintf("Invalid input: %v", err)), nil
 	}
 
-	// Validate path exists (simple filesystem check)
-	if err := validatePathExists(input.Path); err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	// Build command with only provided flags
+	// Build command with only provided flags (operates in current directory)
 	args := []string{"build"}
 
 	// Optional flags - only add if non-nil
@@ -117,11 +108,11 @@ func (t buildTool) handle(ctx context.Context, request toolRequestInterface, cmd
 	args = appendBoolFlag(args, "--confirm", input.Confirm)
 	args = appendBoolFlag(args, "--verbose", input.Verbose)
 
-	// Parse command prefix and execute
+	// Parse command prefix and execute in current directory
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	output, err := executor.Execute(ctx, input.Path, cmdParts[0], cmdParts[1:]...)
+	output, err := executor.Execute(ctx, ".", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return errorResult(fmt.Sprintf("func build failed: %s\nOutput: %s", err, string(output))), nil
 	}

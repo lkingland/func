@@ -11,9 +11,9 @@ import (
 type configVolumesTool struct{}
 
 // ConfigVolumesInput defines the input parameters for the config_volumes tool.
+// All operations occur in the current working directory.
 type ConfigVolumesInput struct {
 	Action    string  `json:"action" jsonschema:"required,description=Action to perform,enum=add,enum=remove,enum=list"`
-	Path      string  `json:"path" jsonschema:"required,description=Path to the function project directory"`
 	Type      *string `json:"type,omitempty" jsonschema:"description=Volume type for add action,enum=configmap,enum=secret,enum=pvc,enum=emptydir"`
 	MountPath *string `json:"mountPath,omitempty" jsonschema:"description=Mount path in the container"`
 	Source    *string `json:"source,omitempty" jsonschema:"description=Name of ConfigMap, Secret, or PVC"`
@@ -74,7 +74,7 @@ func (t configVolumesTool) desc() *mcp.Tool {
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"action", "path"},
+			"required": []string{"action"},
 		},
 	}
 }
@@ -84,11 +84,6 @@ func (t configVolumesTool) handle(ctx context.Context, request toolRequestInterf
 	input, err := unmarshalToolInput[ConfigVolumesInput](request)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Invalid input: %v", err)), nil
-	}
-
-	// Validate path exists
-	if err := validatePathExists(input.Path); err != nil {
-		return errorResult(err.Error()), nil
 	}
 
 	// Build command based on action
@@ -112,7 +107,7 @@ func (t configVolumesTool) handle(ctx context.Context, request toolRequestInterf
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	output, err := executor.Execute(ctx, input.Path, cmdParts[0], cmdParts[1:]...)
+	output, err := executor.Execute(ctx, ".", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return errorResult(fmt.Sprintf("func config volumes failed: %s\nOutput: %s", err, string(output))), nil
 	}
@@ -129,9 +124,9 @@ func (t configVolumesTool) handle(ctx context.Context, request toolRequestInterf
 type configLabelsTool struct{}
 
 // ConfigLabelsInput defines the input parameters for the config_labels tool.
+// All operations occur in the current working directory.
 type ConfigLabelsInput struct {
 	Action  string  `json:"action" jsonschema:"required,description=Action to perform,enum=add,enum=remove,enum=list"`
-	Path    string  `json:"path" jsonschema:"required,description=Path to the function project directory"`
 	Name    *string `json:"name,omitempty" jsonschema:"description=Label name"`
 	Value   *string `json:"value,omitempty" jsonschema:"description=Label value (for add action)"`
 	Verbose *bool   `json:"verbose,omitempty" jsonschema:"description=Enable verbose logging output"`
@@ -171,7 +166,7 @@ func (t configLabelsTool) desc() *mcp.Tool {
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"action", "path"},
+			"required": []string{"action"},
 		},
 	}
 }
@@ -181,11 +176,6 @@ func (t configLabelsTool) handle(ctx context.Context, request toolRequestInterfa
 	input, err := unmarshalToolInput[ConfigLabelsInput](request)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Invalid input: %v", err)), nil
-	}
-
-	// Validate path exists
-	if err := validatePathExists(input.Path); err != nil {
-		return errorResult(err.Error()), nil
 	}
 
 	// Build command based on action
@@ -205,7 +195,7 @@ func (t configLabelsTool) handle(ctx context.Context, request toolRequestInterfa
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	output, err := executor.Execute(ctx, input.Path, cmdParts[0], cmdParts[1:]...)
+	output, err := executor.Execute(ctx, ".", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return errorResult(fmt.Sprintf("func config labels failed: %s\nOutput: %s", err, string(output))), nil
 	}
@@ -222,9 +212,9 @@ func (t configLabelsTool) handle(ctx context.Context, request toolRequestInterfa
 type configEnvsTool struct{}
 
 // ConfigEnvsInput defines the input parameters for the config_envs tool.
+// All operations occur in the current working directory.
 type ConfigEnvsInput struct {
 	Action  string  `json:"action" jsonschema:"required,description=Action to perform,enum=add,enum=remove,enum=list"`
-	Path    string  `json:"path" jsonschema:"required,description=Path to the function project directory"`
 	Name    *string `json:"name,omitempty" jsonschema:"description=Environment variable name"`
 	Value   *string `json:"value,omitempty" jsonschema:"description=Environment variable value (for add action)"`
 	Verbose *bool   `json:"verbose,omitempty" jsonschema:"description=Enable verbose logging output"`
@@ -264,7 +254,7 @@ func (t configEnvsTool) desc() *mcp.Tool {
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"action", "path"},
+			"required": []string{"action"},
 		},
 	}
 }
@@ -274,11 +264,6 @@ func (t configEnvsTool) handle(ctx context.Context, request toolRequestInterface
 	input, err := unmarshalToolInput[ConfigEnvsInput](request)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Invalid input: %v", err)), nil
-	}
-
-	// Validate path exists
-	if err := validatePathExists(input.Path); err != nil {
-		return errorResult(err.Error()), nil
 	}
 
 	// Build command based on action
@@ -298,7 +283,7 @@ func (t configEnvsTool) handle(ctx context.Context, request toolRequestInterface
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	output, err := executor.Execute(ctx, input.Path, cmdParts[0], cmdParts[1:]...)
+	output, err := executor.Execute(ctx, ".", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return errorResult(fmt.Sprintf("func config envs failed: %s\nOutput: %s", err, string(output))), nil
 	}

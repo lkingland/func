@@ -13,7 +13,6 @@ import (
 // TestConfigVolumes_List ensures the config_volumes tool can list volumes
 func TestConfigVolumes_List(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -25,8 +24,8 @@ func TestConfigVolumes_List(t *testing.T) {
 
 	executor := mock.NewExecutor()
 	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		if dir != path {
-			t.Fatalf("expected dir %q, got %q", path, dir)
+		if dir != "." {
+			t.Fatalf("expected dir %q, got %q", ".", dir)
 		}
 		if name != "func" {
 			t.Fatalf("expected command 'func', got %q", name)
@@ -63,7 +62,6 @@ func TestConfigVolumes_List(t *testing.T) {
 		Name: "config_volumes",
 		Arguments: map[string]any{
 			"action": "list",
-			"path":   path,
 		},
 	})
 	if err != nil {
@@ -81,7 +79,6 @@ func TestConfigVolumes_List(t *testing.T) {
 // TestConfigVolumes_Add ensures the config_volumes tool can add volumes
 func TestConfigVolumes_Add(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -93,8 +90,8 @@ func TestConfigVolumes_Add(t *testing.T) {
 
 	executor := mock.NewExecutor()
 	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		if dir != path {
-			t.Fatalf("expected dir %q, got %q", path, dir)
+		if dir != "." {
+			t.Fatalf("expected dir %q, got %q", ".", dir)
 		}
 
 		// Expected: ["config", "volumes", "add", "--type", "secret", "--mount-path", "/workspace/secret", "--source", "my-secret"]
@@ -134,7 +131,6 @@ func TestConfigVolumes_Add(t *testing.T) {
 		Name: "config_volumes",
 		Arguments: map[string]any{
 			"action":    "add",
-			"path":      path,
 			"type":      "secret",
 			"mountPath": "/workspace/secret",
 			"source":    "my-secret",
@@ -148,60 +144,9 @@ func TestConfigVolumes_Add(t *testing.T) {
 	}
 }
 
-// TestConfigVolumes_PathValidation ensures path validation works
-func TestConfigVolumes_PathValidation(t *testing.T) {
-	var (
-		ctx, cancel          = context.WithCancel(context.Background())
-		serverTpt, clientTpt = mcp.NewInMemoryTransports()
-		client               = mcp.NewClient(&mcp.Implementation{
-			Name:    "test-client",
-			Version: "1.0.0",
-		}, nil)
-	)
-	defer cancel()
-
-	executor := mock.NewExecutor()
-	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		t.Fatal("executor should not be called when path validation fails")
-		return nil, nil
-	}
-
-	server := New(WithExecutor(executor))
-	serverSession, err := server.Connect(ctx, serverTpt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-
-	clientSession, err := client.Connect(ctx, clientTpt, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
-
-	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-		Name: "config_volumes",
-		Arguments: map[string]any{
-			"action": "list",
-			"path":   "/nonexistent/path/that/should/not/exist",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !result.IsError {
-		t.Fatal("expected error result for non-existent path")
-	}
-	if executor.ExecuteInvoked {
-		t.Fatal("executor should not be invoked when path validation fails")
-	}
-}
-
 // TestConfigVolumes_BinaryFailure ensures binary errors are propagated
 func TestConfigVolumes_BinaryFailure(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -233,7 +178,6 @@ func TestConfigVolumes_BinaryFailure(t *testing.T) {
 		Name: "config_volumes",
 		Arguments: map[string]any{
 			"action": "list",
-			"path":   path,
 		},
 	})
 	if err != nil {
@@ -251,7 +195,6 @@ func TestConfigVolumes_BinaryFailure(t *testing.T) {
 // TestConfigLabels_List ensures the config_labels tool can list labels
 func TestConfigLabels_List(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -263,8 +206,8 @@ func TestConfigLabels_List(t *testing.T) {
 
 	executor := mock.NewExecutor()
 	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		if dir != path {
-			t.Fatalf("expected dir %q, got %q", path, dir)
+		if dir != "." {
+			t.Fatalf("expected dir %q, got %q", ".", dir)
 		}
 
 		if len(args) != 2 {
@@ -294,7 +237,6 @@ func TestConfigLabels_List(t *testing.T) {
 		Name: "config_labels",
 		Arguments: map[string]any{
 			"action": "list",
-			"path":   path,
 		},
 	})
 	if err != nil {
@@ -308,7 +250,6 @@ func TestConfigLabels_List(t *testing.T) {
 // TestConfigLabels_Add ensures the config_labels tool can add labels
 func TestConfigLabels_Add(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -354,7 +295,6 @@ func TestConfigLabels_Add(t *testing.T) {
 		Name: "config_labels",
 		Arguments: map[string]any{
 			"action": "add",
-			"path":   path,
 			"name":   "environment",
 			"value":  "prod",
 		},
@@ -367,65 +307,9 @@ func TestConfigLabels_Add(t *testing.T) {
 	}
 }
 
-// TestConfigLabels_PathValidation ensures path validation works
-func TestConfigLabels_PathValidation(t *testing.T) {
-	var (
-		ctx, cancel          = context.WithCancel(context.Background())
-		serverTpt, clientTpt = mcp.NewInMemoryTransports()
-		client               = mcp.NewClient(&mcp.Implementation{
-			Name:    "test-client",
-			Version: "1.0.0",
-		}, nil)
-	)
-	defer cancel()
-
-	executor := mock.NewExecutor()
-	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		t.Fatal("executor should not be called when path validation fails")
-		return nil, nil
-	}
-
-	server := New(WithExecutor(executor))
-	serverSession, err := server.Connect(ctx, serverTpt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-
-	clientSession, err := client.Connect(ctx, clientTpt, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
-
-	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-		Name: "config_labels",
-		Arguments: map[string]any{
-			"action": "list",
-			"path":   "/nonexistent/path/that/should/not/exist",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !result.IsError {
-		t.Fatal("expected error result for non-existent path")
-	}
-	if executor.ExecuteInvoked {
-		t.Fatal("executor should not be invoked when path validation fails")
-	}
-
-	errMsg := mcpError(result)
-	if !strings.Contains(errMsg, "path") && !strings.Contains(errMsg, "exist") {
-		t.Errorf("expected error about path, got: %s", errMsg)
-	}
-}
-
 // TestConfigEnvs_List ensures the config_envs tool can list environment variables
 func TestConfigEnvs_List(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -437,8 +321,8 @@ func TestConfigEnvs_List(t *testing.T) {
 
 	executor := mock.NewExecutor()
 	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		if dir != path {
-			t.Fatalf("expected dir %q, got %q", path, dir)
+		if dir != "." {
+			t.Fatalf("expected dir %q, got %q", ".", dir)
 		}
 
 		if len(args) != 2 {
@@ -468,7 +352,6 @@ func TestConfigEnvs_List(t *testing.T) {
 		Name: "config_envs",
 		Arguments: map[string]any{
 			"action": "list",
-			"path":   path,
 		},
 	})
 	if err != nil {
@@ -482,7 +365,6 @@ func TestConfigEnvs_List(t *testing.T) {
 // TestConfigEnvs_Add ensures the config_envs tool can add environment variables
 func TestConfigEnvs_Add(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -528,7 +410,6 @@ func TestConfigEnvs_Add(t *testing.T) {
 		Name: "config_envs",
 		Arguments: map[string]any{
 			"action": "add",
-			"path":   path,
 			"name":   "API_KEY",
 			"value":  "secret123",
 		},
@@ -544,7 +425,6 @@ func TestConfigEnvs_Add(t *testing.T) {
 // TestConfigEnvs_BinaryFailure ensures binary errors are propagated
 func TestConfigEnvs_BinaryFailure(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -576,7 +456,6 @@ func TestConfigEnvs_BinaryFailure(t *testing.T) {
 		Name: "config_envs",
 		Arguments: map[string]any{
 			"action": "list",
-			"path":   path,
 		},
 	})
 	if err != nil {

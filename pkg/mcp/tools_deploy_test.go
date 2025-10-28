@@ -13,7 +13,6 @@ import (
 // TestDeploy ensures the deploy tool executes correctly with minimal arguments
 func TestDeploy(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -25,8 +24,8 @@ func TestDeploy(t *testing.T) {
 
 	executor := mock.NewExecutor()
 	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		if dir != path {
-			t.Fatalf("expected dir %q, got %q", path, dir)
+		if dir != "." {
+			t.Fatalf("expected dir %q, got %q", ".", dir)
 		}
 		if name != "func" {
 			t.Fatalf("expected command 'func', got %q", name)
@@ -60,10 +59,8 @@ func TestDeploy(t *testing.T) {
 
 	// Send Request
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-		Name: "deploy",
-		Arguments: map[string]any{
-			"path": path,
-		},
+		Name:      "deploy",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +78,6 @@ func TestDeploy(t *testing.T) {
 // TestDeploy_Options ensures the deploy tool correctly passes all optional flags
 func TestDeploy_Options(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -93,8 +89,8 @@ func TestDeploy_Options(t *testing.T) {
 
 	executor := mock.NewExecutor()
 	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		if dir != path {
-			t.Fatalf("expected dir %q, got %q", path, dir)
+		if dir != "." {
+			t.Fatalf("expected dir %q, got %q", ".", dir)
 		}
 		if name != "func" {
 			t.Fatalf("expected command 'func', got %q", name)
@@ -146,7 +142,6 @@ func TestDeploy_Options(t *testing.T) {
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "deploy",
 		Arguments: map[string]any{
-			"path":      path,
 			"namespace": "prod",
 			"registry":  "ghcr.io/user",
 			"platform":  "linux/amd64",
@@ -167,69 +162,9 @@ func TestDeploy_Options(t *testing.T) {
 	}
 }
 
-// TestDeploy_PathValidation ensures the tool validates path existence before invoking binary
-func TestDeploy_PathValidation(t *testing.T) {
-	var (
-		ctx, cancel          = context.WithCancel(context.Background())
-		serverTpt, clientTpt = mcp.NewInMemoryTransports()
-		client               = mcp.NewClient(&mcp.Implementation{
-			Name:    "test-client",
-			Version: "1.0.0",
-		}, nil)
-	)
-	defer cancel()
-
-	executor := mock.NewExecutor()
-	executor.ExecuteFn = func(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-		t.Fatal("executor should not be called when path validation fails")
-		return nil, nil
-	}
-
-	// Connect Server
-	server := New(WithExecutor(executor))
-	serverSession, err := server.Connect(ctx, serverTpt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-
-	// Connect Client
-	clientSession, err := client.Connect(ctx, clientTpt, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
-
-	// Send Request with non-existent path
-	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-		Name: "deploy",
-		Arguments: map[string]any{
-			"path": "/nonexistent/path/that/should/not/exist",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Should return error without invoking executor
-	if !result.IsError {
-		t.Fatal("expected error result for non-existent path")
-	}
-	if executor.ExecuteInvoked {
-		t.Fatal("executor should not be invoked when path validation fails")
-	}
-
-	// Error message should mention the path issue
-	errMsg := mcpError(result)
-	if !strings.Contains(errMsg, "path") && !strings.Contains(errMsg, "exist") {
-		t.Errorf("expected error about path, got: %s", errMsg)
-	}
-}
-
 // TestDeploy_BinaryFailure ensures errors from the func binary are returned as MCP errors
 func TestDeploy_BinaryFailure(t *testing.T) {
 	var (
-		path                 = t.TempDir()
 		ctx, cancel          = context.WithCancel(context.Background())
 		serverTpt, clientTpt = mcp.NewInMemoryTransports()
 		client               = mcp.NewClient(&mcp.Implementation{
@@ -262,10 +197,8 @@ func TestDeploy_BinaryFailure(t *testing.T) {
 
 	// Send Request
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-		Name: "deploy",
-		Arguments: map[string]any{
-			"path": path,
-		},
+		Name:      "deploy",
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -14,19 +14,15 @@ SYNOPSIS
 DESCRIPTION
 	Starts the Model Context Protocol (MCP) server.
 
-	IMPORTANT: This command is designed to be invoked by MCP clients (such as
-	Claude Desktop, Cursor, VS Code, Windsurf, etc.), not run directly.
+	This command is designed to be invoked by MCP clients directly
+	(such as Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, etc.);
+	not run directly.
 
-	IMPORTANT:
-	- The FUNC_ENABLE_MCP environment variable must be set to "true"
-
-	For detailed setup instructions and client configuration examples, see:
-	https://github.com/knative/func/blob/main/docs/mcp-integration/integration.md
+	Please see `{{rootCMdUse}} mcp --help` for more information and
+	important warnings.
 
 
-```
 func mcp start
-```
 
 ### Options
 

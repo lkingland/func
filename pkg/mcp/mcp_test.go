@@ -70,8 +70,8 @@ func TestStart(t *testing.T) {
 	if initResult == nil {
 		t.Fatal("expected non-nil initialization result")
 	}
-	if initResult.ServerInfo.Name != "func-mcp" {
-		t.Errorf("expected server name 'func-mcp', got %q", initResult.ServerInfo.Name)
+	if initResult.ServerInfo.Name != "func" {
+		t.Errorf("expected server name 'func', got %q", initResult.ServerInfo.Name)
 	}
 	if initResult.ServerInfo.Version != "1.0.0" {
 		t.Errorf("expected server version '1.0.0', got %q", initResult.ServerInfo.Version)
@@ -109,31 +109,32 @@ func TestStart(t *testing.T) {
 		}
 	}
 
-	// List resources - should have all 14 registered resources
+	// List resources - should have all 15 registered resources
 	resourcesResult, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil {
 		t.Fatalf("failed to list resources: %v", err)
 	}
-	if len(resourcesResult.Resources) != 14 {
-		t.Errorf("expected 14 resources, got %d", len(resourcesResult.Resources))
+	if len(resourcesResult.Resources) != 15 {
+		t.Errorf("expected 15 resources, got %d", len(resourcesResult.Resources))
 	}
 
 	// Verify new resource URIs are present
 	expectedURIs := map[string]bool{
-		"function://current":                      false,
-		"function://help/root":                    false,
-		"function://help/create":                  false,
-		"function://help/build":                   false,
-		"function://help/deploy":                  false,
-		"function://help/list":                    false,
-		"function://help/delete":                  false,
-		"function://help/config/volumes/add":      false,
-		"function://help/config/volumes/remove":   false,
-		"function://help/config/labels/add":       false,
-		"function://help/config/labels/remove":    false,
-		"function://help/config/envs/add":         false,
-		"function://help/config/envs/remove":      false,
-		"function://templates":                    false,
+		"func://current":                    false,
+		"func://help/root":                  false,
+		"func://help/create":                false,
+		"func://help/build":                 false,
+		"func://help/deploy":                false,
+		"func://help/list":                  false,
+		"func://help/delete":                false,
+		"func://help/config/volumes/add":    false,
+		"func://help/config/volumes/remove": false,
+		"func://help/config/labels/add":     false,
+		"func://help/config/labels/remove":  false,
+		"func://help/config/envs/add":       false,
+		"func://help/config/envs/remove":    false,
+		"func://languages":                  false,
+		"func://templates":                  false,
 	}
 	for _, resource := range resourcesResult.Resources {
 		if _, ok := expectedURIs[resource.URI]; ok {
@@ -146,17 +147,30 @@ func TestStart(t *testing.T) {
 		}
 	}
 
-	// List prompts - should have the workflow prompt
+	// List prompts - should have the workflow prompts
 	promptsResult, err := clientSession.ListPrompts(ctx, &mcp.ListPromptsParams{})
 	if err != nil {
 		t.Fatalf("failed to list prompts: %v", err)
 	}
-	if len(promptsResult.Prompts) != 1 {
-		t.Errorf("expected 1 prompt, got %d", len(promptsResult.Prompts))
+	if len(promptsResult.Prompts) != 2 {
+		t.Errorf("expected 2 prompts, got %d", len(promptsResult.Prompts))
 	}
 
-	// Verify the workflow prompt is registered
-	if len(promptsResult.Prompts) > 0 && promptsResult.Prompts[0].Name != "create_function" {
-		t.Errorf("expected prompt name 'create_function', got %q", promptsResult.Prompts[0].Name)
+	// Verify both workflow prompts are registered
+	expectedPrompts := map[string]bool{
+		"create_function": false,
+		"deploy_function": false,
+	}
+	for _, prompt := range promptsResult.Prompts {
+		if _, exists := expectedPrompts[prompt.Name]; exists {
+			expectedPrompts[prompt.Name] = true
+		} else {
+			t.Errorf("unexpected prompt: %s", prompt.Name)
+		}
+	}
+	for name, found := range expectedPrompts {
+		if !found {
+			t.Errorf("expected prompt %q not found", name)
+		}
 	}
 }

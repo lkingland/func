@@ -12,8 +12,8 @@ type deployTool struct{}
 
 // DeployInput defines the input parameters for the deploy tool.
 // All optional fields use pointers so we can distinguish "not provided" from "explicitly set to default".
+// All operations occur in the current working directory.
 type DeployInput struct {
-	Path               string  `json:"path" jsonschema:"required,description=Path to the function project directory"`
 	Builder            *string `json:"builder,omitempty" jsonschema:"description=Builder to use (pack|s2i|host),enum=pack,enum=s2i,enum=host"`
 	Registry           *string `json:"registry,omitempty" jsonschema:"description=Container registry for function image"`
 	Image              *string `json:"image,omitempty" jsonschema:"description=Full image name (overrides registry)"`
@@ -32,7 +32,6 @@ type DeployInput struct {
 	RegistryInsecure   *bool   `json:"registryInsecure,omitempty" jsonschema:"description=Skip TLS verification for registry"`
 	BuildTimestamp     *bool   `json:"buildTimestamp,omitempty" jsonschema:"description=Use actual time in image metadata"`
 	Remote             *bool   `json:"remote,omitempty" jsonschema:"description=Trigger remote deployment"`
-	Confirm            *bool   `json:"confirm,omitempty" jsonschema:"description=Prompt for confirmation before deploying"`
 	Verbose            *bool   `json:"verbose,omitempty" jsonschema:"description=Enable verbose logging output"`
 }
 
@@ -46,22 +45,19 @@ type DeployOutput struct {
 func (t deployTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "deploy",
-		Description: "Deploys a function to a Kubernetes cluster. Builds the image if needed and creates/updates the service. Reads configuration from func.yaml.",
+		Title:       "Deploy Function",
+		Description: "Deploy the Function to Kubernetes from the current directory. Builds the container image if needed.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{
-					"type":        "string",
-					"description": "Path to the function project directory (must exist and contain func.yaml)",
-				},
 				"builder": map[string]any{
 					"type":        "string",
 					"description": "Builder to use (pack, s2i, or host)",
-					"enum":        []string{"pack", "s2i", "host"},
+					"enum":        []string{"host", "pack", "s2i"},
 				},
 				"registry": map[string]any{
 					"type":        "string",
-					"description": "Container registry for function image",
+					"description": "Container registry for the Function's image",
 				},
 				"image": map[string]any{
 					"type":        "string",
@@ -69,35 +65,35 @@ func (t deployTool) desc() *mcp.Tool {
 				},
 				"namespace": map[string]any{
 					"type":        "string",
-					"description": "Kubernetes namespace to deploy into",
+					"description": "Namespace into which the Function will be deployed",
 				},
 				"gitUrl": map[string]any{
 					"type":        "string",
-					"description": "Git URL containing the function source",
+					"description": "Git URL containing the Function",
 				},
 				"gitBranch": map[string]any{
 					"type":        "string",
-					"description": "Git branch for remote deployment",
+					"description": "Git branch to use with remote deployment",
 				},
 				"gitDir": map[string]any{
 					"type":        "string",
-					"description": "Directory inside the Git repository",
+					"description": "Directory inside the Git repository when using remote Git deployment",
 				},
 				"builderImage": map[string]any{
 					"type":        "string",
-					"description": "Custom builder image",
+					"description": "Use a custom builder image (pack builder only)",
 				},
 				"domain": map[string]any{
 					"type":        "string",
-					"description": "Domain for the function route",
+					"description": "Allocate a domain (route) for the Function",
 				},
 				"platform": map[string]any{
 					"type":        "string",
-					"description": "Target platform (e.g., linux/amd64)",
+					"description": "Specify a target platform (e.g., linux/amd64)",
 				},
 				"build": map[string]any{
 					"type":        "string",
-					"description": "Build control: true, false, or auto",
+					"description": "Build the Function image: true, false, or auto (default)",
 				},
 				"pvcSize": map[string]any{
 					"type":        "string",
@@ -105,7 +101,7 @@ func (t deployTool) desc() *mcp.Tool {
 				},
 				"serviceAccount": map[string]any{
 					"type":        "string",
-					"description": "Kubernetes ServiceAccount to use",
+					"description": "Kubernetes ServiceAccount",
 				},
 				"remoteStorageClass": map[string]any{
 					"type":        "string",
@@ -113,7 +109,7 @@ func (t deployTool) desc() *mcp.Tool {
 				},
 				"push": map[string]any{
 					"type":        "boolean",
-					"description": "Push image to registry before deployment",
+					"description": "Push image to registry before deployment (default true)",
 				},
 				"registryInsecure": map[string]any{
 					"type":        "boolean",
@@ -127,16 +123,11 @@ func (t deployTool) desc() *mcp.Tool {
 					"type":        "boolean",
 					"description": "Trigger remote deployment",
 				},
-				"confirm": map[string]any{
-					"type":        "boolean",
-					"description": "Prompt for confirmation before deploying",
-				},
 				"verbose": map[string]any{
 					"type":        "boolean",
 					"description": "Enable verbose logging output",
 				},
 			},
-			"required": []string{"path"},
 		},
 	}
 }
@@ -148,12 +139,7 @@ func (t deployTool) handle(ctx context.Context, request toolRequestInterface, cm
 		return errorResult(fmt.Sprintf("Invalid input: %v", err)), nil
 	}
 
-	// Validate path exists (simple filesystem check)
-	if err := validatePathExists(input.Path); err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	// Build command with only provided flags
+	// Build command with only provided flags (operates in current directory)
 	args := []string{"deploy"}
 
 	// Optional flags - only add if non-nil
@@ -175,14 +161,13 @@ func (t deployTool) handle(ctx context.Context, request toolRequestInterface, cm
 	args = appendBoolFlag(args, "--registry-insecure", input.RegistryInsecure)
 	args = appendBoolFlag(args, "--build-timestamp", input.BuildTimestamp)
 	args = appendBoolFlag(args, "--remote", input.Remote)
-	args = appendBoolFlag(args, "--confirm", input.Confirm)
 	args = appendBoolFlag(args, "--verbose", input.Verbose)
 
-	// Parse command prefix and execute
+	// Parse command prefix and execute in current directory
 	cmdParts := parseCommand(cmdPrefix)
 	cmdParts = append(cmdParts, args...)
 
-	output, err := executor.Execute(ctx, input.Path, cmdParts[0], cmdParts[1:]...)
+	output, err := executor.Execute(ctx, ".", cmdParts[0], cmdParts[1:]...)
 	if err != nil {
 		return errorResult(fmt.Sprintf("func deploy failed: %s\nOutput: %s", err, string(output))), nil
 	}
