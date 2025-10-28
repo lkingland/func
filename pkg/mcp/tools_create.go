@@ -34,7 +34,7 @@ type CreateOutput struct {
 func (t createTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "create",
-		Description: "Creates a new Knative function project in the specified directory. The function will be created as a subdirectory with the given name.",
+		Description: "Creates a new function project in the specified directory. The function will be created as a subdirectory with the given name.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

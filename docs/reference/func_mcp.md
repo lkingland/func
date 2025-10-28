@@ -13,21 +13,29 @@ SYNOPSIS
 
 DESCRIPTION
 	Manages a Model Context Protocol (MCP) server over standard input/output (stdio) transport.
-	This implementation aims to support tools for deploying and creating serverless functions.
+	This server enables AI language models to interact with Knative Functions through the
+	Model Context Protocol.
 
-	Note: This command is still under development.
+	IMPORTANT: This command is designed to be invoked by MCP clients (such as Claude Desktop,
+	Cursor, VS Code, Windsurf, etc.), not run directly by users. The MCP client automatically
+	launches and manages the server based on its configuration.
+
+	For setup instructions and client configuration examples, see:
+	https://github.com/knative/func/blob/main/docs/mcp-integration/integration.md
+
+	Note: This is an EXPERIMENTAL feature. The FUNC_ENABLE_MCP environment variable must be
+	set to "true" for the server to start. See documentation for details.
 
 AVAILABLE COMMANDS
 	start    Start the MCP server
 
 EXAMPLES
 
-	o Start an MCP server:
-		func mcp start
-
-	o Display this help:
-		func mcp
+	o View this help:
 		func mcp --help
+
+	Note: End users should configure their MCP client, not run these commands directly.
+	See the documentation link above for configuration instructions.
 
 
 ### Options

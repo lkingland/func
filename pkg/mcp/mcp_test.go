@@ -109,21 +109,54 @@ func TestStart(t *testing.T) {
 		}
 	}
 
-	// List resources - should have all 13 registered resources
+	// List resources - should have all 14 registered resources
 	resourcesResult, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil {
 		t.Fatalf("failed to list resources: %v", err)
 	}
-	if len(resourcesResult.Resources) != 13 {
-		t.Errorf("expected 13 resources, got %d", len(resourcesResult.Resources))
+	if len(resourcesResult.Resources) != 14 {
+		t.Errorf("expected 14 resources, got %d", len(resourcesResult.Resources))
 	}
 
-	// List prompts - should have all 3 registered prompts
+	// Verify new resource URIs are present
+	expectedURIs := map[string]bool{
+		"function://current":                      false,
+		"function://help/root":                    false,
+		"function://help/create":                  false,
+		"function://help/build":                   false,
+		"function://help/deploy":                  false,
+		"function://help/list":                    false,
+		"function://help/delete":                  false,
+		"function://help/config/volumes/add":      false,
+		"function://help/config/volumes/remove":   false,
+		"function://help/config/labels/add":       false,
+		"function://help/config/labels/remove":    false,
+		"function://help/config/envs/add":         false,
+		"function://help/config/envs/remove":      false,
+		"function://templates":                    false,
+	}
+	for _, resource := range resourcesResult.Resources {
+		if _, ok := expectedURIs[resource.URI]; ok {
+			expectedURIs[resource.URI] = true
+		}
+	}
+	for uri, found := range expectedURIs {
+		if !found {
+			t.Errorf("expected resource URI %q not found in resources list", uri)
+		}
+	}
+
+	// List prompts - should have the workflow prompt
 	promptsResult, err := clientSession.ListPrompts(ctx, &mcp.ListPromptsParams{})
 	if err != nil {
 		t.Fatalf("failed to list prompts: %v", err)
 	}
-	if len(promptsResult.Prompts) != 3 {
-		t.Errorf("expected 3 prompts, got %d", len(promptsResult.Prompts))
+	if len(promptsResult.Prompts) != 1 {
+		t.Errorf("expected 1 prompt, got %d", len(promptsResult.Prompts))
+	}
+
+	// Verify the workflow prompt is registered
+	if len(promptsResult.Prompts) > 0 && promptsResult.Prompts[0].Name != "create_function" {
+		t.Errorf("expected prompt name 'create_function', got %q", promptsResult.Prompts[0].Name)
 	}
 }

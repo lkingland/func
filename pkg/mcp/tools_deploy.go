@@ -46,7 +46,7 @@ type DeployOutput struct {
 func (t deployTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "deploy",
-		Description: "Deploys a function to a Kubernetes cluster. Builds the image if needed and creates/updates the Knative service. Reads configuration from func.yaml.",
+		Description: "Deploys a function to a Kubernetes cluster. Builds the image if needed and creates/updates the service. Reads configuration from func.yaml.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

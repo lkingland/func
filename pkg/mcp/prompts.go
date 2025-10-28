@@ -3,146 +3,230 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Prompt handler types
+// promptHandlerFunc decorates mcp prompt handlers with a command prefix
 type promptHandlerFunc func(context.Context, *mcp.GetPromptRequest, string) (*mcp.GetPromptResult, error)
 
+// withPromptPrefix creates a mcp.PromptHandler that injects the prefix
 func withPromptPrefix(prefix string, impl promptHandlerFunc) mcp.PromptHandler {
 	return func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		return impl(ctx, request, prefix)
 	}
 }
 
-// helpPrompt - root help prompt
-type helpPrompt struct{}
+// createFunctionPrompt - comprehensive workflow for creating and deploying a new function
+type createFunctionPrompt struct{}
 
-func (p helpPrompt) desc() *mcp.Prompt {
+func (p createFunctionPrompt) desc() *mcp.Prompt {
 	return &mcp.Prompt{
-		Name:        "help",
-		Description: "help prompt for the root command",
-	}
-}
-
-func (p helpPrompt) handler(prefix string) mcp.PromptHandler {
-	return withPromptPrefix(prefix, p.handle)
-}
-
-func (p helpPrompt) handle(ctx context.Context, request *mcp.GetPromptRequest, cmdPrefix string) (*mcp.GetPromptResult, error) {
-	return &mcp.GetPromptResult{
-		Description: "Help Prompt",
-		Messages: []*mcp.PromptMessage{
-			{
-				Role: "user",
-				Content: &mcp.TextContent{
-					Text: fmt.Sprintf("What can I do with the %s command?", cmdPrefix),
-				},
-			},
-			{
-				Role: "assistant",
-				Content: &mcp.EmbeddedResource{
-					Resource: &mcp.ResourceContents{
-						URI:      "func://docs",
-						MIMEType: "text/plain",
-					},
-				},
-			},
-		},
-	}, nil
-}
-
-// cmdHelpPrompt - command-specific help prompt
-type cmdHelpPrompt struct{}
-
-func (p cmdHelpPrompt) desc() *mcp.Prompt {
-	return &mcp.Prompt{
-		Name:        "cmd_help",
-		Description: "help prompt for a specific command",
+		Name:        "create_function",
+		Description: "Guide me through creating a new function: choose language and template, configure container registry, select builder, and deploy to Kubernetes. Use this when starting a new function project.",
 		Arguments: []*mcp.PromptArgument{
 			{
-				Name:        "cmd",
-				Description: "The command for which help is requested",
-				Required:    true,
+				Name:        "language",
+				Description: "Programming language (e.g., go, python, node, typescript, rust)",
+				Required:    false,
+			},
+			{
+				Name:        "template",
+				Description: "Function template type (default: http)",
+				Required:    false,
+			},
+			{
+				Name:        "registry",
+				Description: "Container registry domain (e.g., docker.io, ghcr.io, quay.io)",
+				Required:    false,
+			},
+			{
+				Name:        "namespace",
+				Description: "Registry namespace (your username or organization)",
+				Required:    false,
+			},
+			{
+				Name:        "builder",
+				Description: "Builder type: 'host' or 'pack' (default: host for Go/Python, pack for others)",
+				Required:    false,
 			},
 		},
 	}
 }
 
-func (p cmdHelpPrompt) handler(prefix string) mcp.PromptHandler {
-	return withPromptPrefix(prefix, p.handle)
-}
+func (p createFunctionPrompt) handle(ctx context.Context, request *mcp.GetPromptRequest, cmdPrefix string) (*mcp.GetPromptResult, error) {
+	// Extract arguments with defaults
+	args := request.Params.Arguments
+	language := getArgOrDefault(args, "language", "")
+	template := getArgOrDefault(args, "template", "http")
+	registry := getArgOrDefault(args, "registry", "")
+	namespace := getArgOrDefault(args, "namespace", "")
+	builder := getArgOrDefault(args, "builder", "")
 
-func (p cmdHelpPrompt) handle(ctx context.Context, request *mcp.GetPromptRequest, cmdPrefix string) (*mcp.GetPromptResult, error) {
-	cmd, ok := request.Params.Arguments["cmd"]
-	if !ok || cmd == "" {
-		return nil, fmt.Errorf("cmd is required and must be a non-empty string")
+	// Determine default builder based on language
+	if builder == "" && language != "" {
+		if language == "go" || language == "python" {
+			builder = "host"
+		} else {
+			builder = "pack"
+		}
 	}
 
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("invalid cmd: %s", cmd)
+	// Build the conversation messages
+	messages := []*mcp.PromptMessage{
+		{
+			Role: "user",
+			Content: &mcp.TextContent{
+				Text: "I want to create a new function and deploy it to my cluster.",
+			},
+		},
+		{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: fmt.Sprintf("I'll guide you through creating and deploying a new function using %s. Let's start by setting up your function directory.\n\nFirst, create or navigate to a directory for your function:\n```bash\nmkdir my-function && cd my-function\n```", cmdPrefix),
+			},
+		},
+		{
+			Role: "user",
+			Content: &mcp.TextContent{
+				Text: "Directory is ready. What's next?",
+			},
+		},
 	}
+
+	// Language and template selection
+	if language == "" {
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: "Now let's choose a language and template. Here are the available templates:",
+			},
+		})
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.EmbeddedResource{
+				Resource: &mcp.ResourceContents{
+					URI:      "function://templates",
+					MIMEType: "text/plain",
+				},
+			},
+		})
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: fmt.Sprintf("Use the 'create' tool to initialize your function. For example, to create a Go HTTP function:\n```bash\n%s create --language go --template http\n```", cmdPrefix),
+			},
+		})
+	} else {
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: fmt.Sprintf("I'll help you create a %s function with the '%s' template. Run:\n```bash\n%s create --language %s --template %s\n```", language, template, cmdPrefix, language, template),
+			},
+		})
+	}
+
+	messages = append(messages, &mcp.PromptMessage{
+		Role: "user",
+		Content: &mcp.TextContent{
+			Text: "Function initialized! What about the container registry?",
+		},
+	})
+
+	// Registry configuration
+	if registry == "" || namespace == "" {
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: "You'll need to configure where your function's container image will be stored. This requires:\n\n1. **Registry domain**: Where images are hosted (e.g., docker.io, ghcr.io, quay.io)\n2. **Namespace**: Your username or organization name\n\nExample configurations:\n- Docker Hub: `docker.io/alice`\n- GitHub Container Registry: `ghcr.io/alice`\n- Quay.io: `quay.io/alice`\n\nYour final image location will be: `{registry}/{namespace}/{function-name}`\n\nFor a function named 'my-function' with registry 'docker.io/alice', the image would be: `docker.io/alice/my-function`",
+			},
+		})
+	} else {
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: fmt.Sprintf("Your container image will be stored at: `%s/%s/{function-name}`\n\nFor a function named 'my-function', the full image location will be:\n`%s/%s/my-function`", registry, namespace, registry, namespace),
+			},
+		})
+	}
+
+	// Builder selection
+	messages = append(messages, &mcp.PromptMessage{
+		Role: "user",
+		Content: &mcp.TextContent{
+			Text: "Got it. What about the builder?",
+		},
+	})
+
+	if builder != "" {
+		builderExplanation := "The builder creates your container image. "
+		if builder == "host" {
+			builderExplanation += "The 'host' builder uses your local environment (recommended for Go and Python)."
+		} else {
+			builderExplanation += "The 'pack' builder uses Cloud Native Buildpacks (recommended for other languages)."
+		}
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: fmt.Sprintf("%s\n\nYour function will use the '%s' builder (good choice for %s!).", builderExplanation, builder, language),
+			},
+		})
+	} else {
+		messages = append(messages, &mcp.PromptMessage{
+			Role: "assistant",
+			Content: &mcp.TextContent{
+				Text: "You can choose between two builders:\n\n- **host**: Uses your local environment (default for Go and Python)\n- **pack**: Uses Cloud Native Buildpacks (default for other languages)\n\nThe builder will be selected automatically based on your language, or you can specify it with `--builder` flag.",
+			},
+		})
+	}
+
+	// Deployment
+	messages = append(messages, &mcp.PromptMessage{
+		Role: "user",
+		Content: &mcp.TextContent{
+			Text: "Ready to deploy!",
+		},
+	})
+
+	deployCmd := fmt.Sprintf("%s deploy", cmdPrefix)
+	if registry != "" && namespace != "" {
+		deployCmd += fmt.Sprintf(" --registry %s/%s", registry, namespace)
+	}
+	if builder != "" {
+		deployCmd += fmt.Sprintf(" --builder %s", builder)
+	}
+
+	messages = append(messages, &mcp.PromptMessage{
+		Role: "assistant",
+		Content: &mcp.TextContent{
+			Text: fmt.Sprintf("Perfect! Before deploying, make sure you're connected to your target Kubernetes cluster:\n```bash\nkubectl config current-context\nkubectl get ns\n```\n\nOnce confirmed, deploy your function:\n```bash\n%s\n```\n\nThe deploy command will:\n1. Build your container image\n2. Push it to your registry\n3. Deploy it to your cluster\n4. Return the function's URL", deployCmd),
+		},
+	})
+
+	messages = append(messages, &mcp.PromptMessage{
+		Role: "user",
+		Content: &mcp.TextContent{
+			Text: "Deployed! How do I test it?",
+		},
+	})
+
+	messages = append(messages, &mcp.PromptMessage{
+		Role: "assistant",
+		Content: &mcp.TextContent{
+			Text: fmt.Sprintf("Great! After deployment, %s will display your function's URL. Test it with:\n\n```bash\ncurl https://your-function-url.example.com\n```\n\nYou can also:\n- View function details: `%s describe`\n- Check logs: `%s logs`\n- List all functions: `%s list`\n- Update and redeploy: Make changes and run `%s deploy` again\n\nYour function is now live and ready to handle requests!", cmdPrefix, cmdPrefix, cmdPrefix, cmdPrefix, cmdPrefix),
+		},
+	})
 
 	return &mcp.GetPromptResult{
-		Description: "Cmd Help Prompt",
-		Messages: []*mcp.PromptMessage{
-			{
-				Role: "user",
-				Content: &mcp.TextContent{
-					Text: fmt.Sprintf("What can I do with this %s command? Please provide help for the command: %s", cmdPrefix, cmd),
-				},
-			},
-			{
-				Role: "assistant",
-				Content: &mcp.EmbeddedResource{
-					Resource: &mcp.ResourceContents{
-						URI:      fmt.Sprintf("func://%s/docs", strings.Join(parts, "/")),
-						MIMEType: "text/plain",
-					},
-				},
-			},
-		},
+		Description: "Create and Deploy New Function Workflow",
+		Messages:    messages,
 	}, nil
 }
 
-// listTemplatesPrompt - prompt to list available function templates
-type listTemplatesPrompt struct{}
-
-func (p listTemplatesPrompt) desc() *mcp.Prompt {
-	return &mcp.Prompt{
-		Name:        "list_templates",
-		Description: "prompt to list available function templates",
+// getArgOrDefault extracts an argument value or returns a default
+func getArgOrDefault(args map[string]string, key, defaultValue string) string {
+	if val, ok := args[key]; ok && val != "" {
+		return val
 	}
-}
-
-func (p listTemplatesPrompt) handler(_ string) mcp.PromptHandler {
-	return func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		return p.handle(ctx, request)
-	}
-}
-
-func (p listTemplatesPrompt) handle(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-	return &mcp.GetPromptResult{
-		Description: "List Templates Prompt",
-		Messages: []*mcp.PromptMessage{
-			{
-				Role: "user",
-				Content: &mcp.TextContent{
-					Text: "List available function templates",
-				},
-			},
-			{
-				Role: "assistant",
-				Content: &mcp.EmbeddedResource{
-					Resource: &mcp.ResourceContents{
-						URI:      "func://templates",
-						MIMEType: "text/plain",
-					},
-				},
-			},
-		},
-	}, nil
+	return defaultValue
 }

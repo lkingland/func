@@ -2,12 +2,29 @@ package mcp
 
 import (
 	"context"
+	"os/exec"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var templateRepos = []string{
 	"https://github.com/functions-dev/templates",
+}
+
+// Executor abstracts command execution for testability
+type Executor interface {
+	Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
+}
+
+// binaryExecutor implements Executor using os/exec
+type binaryExecutor struct{}
+
+func (e binaryExecutor) Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	return cmd.CombinedOutput()
 }
 
 type Server struct {
@@ -26,12 +43,12 @@ type tool interface {
 
 type resource interface {
 	desc() *mcp.Resource
-	handler(prefix string) mcp.ResourceHandler
+	handle(context.Context, *mcp.ReadResourceRequest, string, Executor) (*mcp.ReadResourceResult, error)
 }
 
 type prompt interface {
 	desc() *mcp.Prompt
-	handler(prefix string) mcp.PromptHandler
+	handle(context.Context, *mcp.GetPromptRequest, string) (*mcp.GetPromptResult, error)
 }
 
 type Option func(*Server)
@@ -71,23 +88,22 @@ func New(options ...Option) *Server {
 		},
 		resources: []resource{
 			rootHelpResource{},
-			cmdHelpResource{[]string{"create"}, "func://create/docs"},
-			cmdHelpResource{[]string{"build"}, "func://build/docs"},
-			cmdHelpResource{[]string{"deploy"}, "func://deploy/docs"},
-			cmdHelpResource{[]string{"list"}, "func://list/docs"},
-			cmdHelpResource{[]string{"delete"}, "func://delete/docs"},
-			cmdHelpResource{[]string{"config", "volumes", "add"}, "func://config/volumes/add/docs"},
-			cmdHelpResource{[]string{"config", "volumes", "remove"}, "func://config/volumes/remove/docs"},
-			cmdHelpResource{[]string{"config", "labels", "add"}, "func://config/labels/add/docs"},
-			cmdHelpResource{[]string{"config", "labels", "remove"}, "func://config/labels/remove/docs"},
-			cmdHelpResource{[]string{"config", "envs", "add"}, "func://config/envs/add/docs"},
-			cmdHelpResource{[]string{"config", "envs", "remove"}, "func://config/envs/remove/docs"},
+			cmdHelpResource{[]string{"create"}, "function://help/create"},
+			cmdHelpResource{[]string{"build"}, "function://help/build"},
+			cmdHelpResource{[]string{"deploy"}, "function://help/deploy"},
+			cmdHelpResource{[]string{"list"}, "function://help/list"},
+			cmdHelpResource{[]string{"delete"}, "function://help/delete"},
+			cmdHelpResource{[]string{"config", "volumes", "add"}, "function://help/config/volumes/add"},
+			cmdHelpResource{[]string{"config", "volumes", "remove"}, "function://help/config/volumes/remove"},
+			cmdHelpResource{[]string{"config", "labels", "add"}, "function://help/config/labels/add"},
+			cmdHelpResource{[]string{"config", "labels", "remove"}, "function://help/config/labels/remove"},
+			cmdHelpResource{[]string{"config", "envs", "add"}, "function://help/config/envs/add"},
+			cmdHelpResource{[]string{"config", "envs", "remove"}, "function://help/config/envs/remove"},
+			currentFunctionResource{},
 			templatesResource{},
 		},
 		prompts: []prompt{
-			helpPrompt{},
-			cmdHelpPrompt{},
-			listTemplatesPrompt{},
+			createFunctionPrompt{},
 		},
 	}
 
@@ -100,11 +116,11 @@ func New(options ...Option) *Server {
 	}
 
 	for _, resource := range s.resources {
-		s.impl.AddResource(resource.desc(), resource.handler(s.prefix))
+		s.impl.AddResource(resource.desc(), withResourcePrefix(s.prefix, s.executor, resource.handle))
 	}
 
 	for _, prompt := range s.prompts {
-		s.impl.AddPrompt(prompt.desc(), prompt.handler(s.prefix))
+		s.impl.AddPrompt(prompt.desc(), withPromptPrefix(s.prefix, prompt.handle))
 	}
 
 	return s

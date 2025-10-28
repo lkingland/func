@@ -5,27 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-// Executor abstracts command execution for testability
-type Executor interface {
-	Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
-}
-
-// binaryExecutor implements Executor using os/exec
-type binaryExecutor struct{}
-
-func (e binaryExecutor) Execute(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	return cmd.CombinedOutput()
-}
 
 // toolHandlerFunc decorates mcp tool handlers with a command prefix and executor
 type toolHandlerFunc func(context.Context, toolRequestInterface, string, Executor) (*mcp.CallToolResult, error)
