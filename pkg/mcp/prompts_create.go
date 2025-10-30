@@ -71,7 +71,7 @@ func (p createFunctionPrompt) handle(ctx context.Context, request *mcp.GetPrompt
 		messages = append(messages, &mcp.PromptMessage{
 			Role: "assistant",
 			Content: &mcp.TextContent{
-				Text: fmt.Sprintf("I see you specified the language %s already. I will take that into account.", template),
+				Text: fmt.Sprintf("I see you specified the template %s already. I will take that into account.", template),
 			},
 		})
 	}
