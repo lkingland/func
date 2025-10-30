@@ -109,7 +109,7 @@ combined this constitutes a full "registry" location for the Function's built
 image.  Examples:  "docker.io/alice", "localhost:50000/func.  The final
 Function image will then have the Function name as a suffix along with the
 :latest tag.  (example: docker.io/alice/myfunc:latest), but this is hidden
-from the user unless they want to fully override this beahvior and supply their
+from the user unless they want to fully override this behavior and supply their
 own custom value for the image parameter.  It is important to carefully guide
 the user through the creation of this registry argument, as this is often the
 most challenging part of getting a Function deployed the first time.   Ask for
