@@ -117,7 +117,7 @@ the registry.  If they only provide the DOMAIN part (eg docker.io or
 localhost:50000), ask them to either confirm there is no registry user part or
 provide it.  The final value is the two concatenated with a forward slash.
 Subsequent deployments automatically reuse the last setting, so this should
-only be aked for on those first deployments.  BE SURE to verify the final
+only be asked for on those first deployments.  BE SURE to verify the final
 format of this value as consisting of both a DOMAIN part and a USER part.
 Domain-only is technically allowed, but should be explicitly acknowledged, as
 this is an edge case.
