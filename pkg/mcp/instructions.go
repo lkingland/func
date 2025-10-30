@@ -139,7 +139,7 @@ build tool:
 - Useful for creating custom deployments using .yaml files or integrating
   with other systems which expect containers.
 - Uses same builder settings as deploy would use
-- The user should be notified this is an unnecssary step if they intend to
+- The user should be notified this is an unnecessary step if they intend to
   deploy, as building is handled as part of deployment.
 
 list tool:
