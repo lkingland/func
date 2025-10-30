@@ -28,6 +28,11 @@ func (t listTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "list",
 		Description: "Lists all deployed functions in the current namespace, specified namespace, or all namespaces.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "List Functions",
+			ReadOnlyHint:   true,
+			IdempotentHint: true, // Listing functions with the same parameters multiple times returns consistent results at any point in time.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

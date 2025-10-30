@@ -37,6 +37,12 @@ func (t buildTool) desc() *mcp.Tool {
 		Name:        "build",
 		Title:       "Build Function",
 		Description: "Build the Function's container image in the current directory.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Build Function",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(false),
+			IdempotentHint:  true, // Building the same source code multiple times produces the same container image.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

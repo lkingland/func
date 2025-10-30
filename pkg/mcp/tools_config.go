@@ -32,6 +32,12 @@ func (t configVolumesTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "config_volumes",
 		Description: "Manages volume configurations for a function. Can add, remove, or list volumes in func.yaml.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Config Volumes",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(true),
+			IdempotentHint:  false, // Adding the same volume twice or removing a non-existent volume will fail.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -141,6 +147,12 @@ func (t configLabelsTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "config_labels",
 		Description: "Manages label configurations for a function. Can add, remove, or list labels in func.yaml.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Config Labels",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(true),
+			IdempotentHint:  false, // Adding the same label twice or removing a non-existent label will fail.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -229,6 +241,12 @@ func (t configEnvsTool) desc() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "config_envs",
 		Description: "Manages environment variable configurations for a function. Can add, remove, or list environment variables in func.yaml.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Config Environment Variables",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(true),
+			IdempotentHint:  false, // Adding the same environment variable twice or removing a non-existent one will fail.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -34,6 +34,12 @@ func (t createTool) desc() *mcp.Tool {
 		Name:        "create",
 		Title:       "Create Function",
 		Description: "Initialize a new Function project in the current directory (like 'git init'). Function name defaults to directory name.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create Function",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(false),
+			IdempotentHint:  false, // Running create twice on the same path fails because function files already exist.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -105,6 +105,12 @@ func appendBoolFlag(args []string, flag string, value *bool) []string {
 	return args
 }
 
+// ptr returns a pointer to the given value.
+// Useful for setting optional annotation fields.
+func ptr[T any](v T) *T {
+	return &v
+}
+
 // healthCheck is a simple tool for testing MCP server connectivity
 type healthCheck struct{}
 

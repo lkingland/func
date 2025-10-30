@@ -47,6 +47,12 @@ func (t deployTool) desc() *mcp.Tool {
 		Name:        "deploy",
 		Title:       "Deploy Function",
 		Description: "Deploy the Function to Kubernetes from the current directory. Builds the container image if needed.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Deploy Function",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(false),
+			IdempotentHint:  true, // Deploying the same function configuration multiple times converges to the same desired state.
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

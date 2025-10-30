@@ -32,6 +32,12 @@ func (t deleteTool) desc() *mcp.Tool {
 		Name:        "delete",
 		Title:       "Delete Function",
 		Description: "Delete a deployed Function from the Kubernetes cluster.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Delete Function",
+			ReadOnlyHint:    false,
+			DestructiveHint: ptr(true),
+			IdempotentHint:  true, // Deleting the same function multiple times results in the same end state (function doesn't exist).
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
