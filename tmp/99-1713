@@ -1,0 +1,1 @@
+	fmt.Fprintf(out, "%s  The following changes have not been undone:\n - Config setting registry localhost:%d (%s) as insecure\n - Downloaded container images were not removed\n", red("NOTE:"), cfg.RegistryPort, registryName)

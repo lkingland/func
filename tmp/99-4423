@@ -1,0 +1,42 @@
+	retry := func(fn func() error) error {
+		for attempt := 1; attempt <= cfg.Retries; attempt++ {
+			fmt.Fprintln(out, blue(fmt.Sprintf("------------------ Attempt %d ------------------", attempt)))
+
+			err := fn()
+			if err == nil {
+				fmt.Fprintln(out, green("------------------ Success! Cluster allocated ------------------"))
+				return nil
+			}
+
+			fmt.Fprintf(out, "%s\n", red(fmt.Sprintf("Allocation failed: %v", err)))
+
+			if cfg.NoCleanup {
+				fmt.Fprintln(out, yellow("Cluster left in place for inspection (--no-cleanup). Clean up with: func cluster delete"))
+			} else {
+				fmt.Fprintln(out, red("------------------ Cleaning up failed attempt... ------------------"))
+				if deleteErr := Delete(ctx, cfg, out); deleteErr != nil {
+					fmt.Fprintf(out, "Warning: cleanup failed: %v\n", deleteErr)
+				}
+			}
+
+			if attempt < cfg.Retries {
+				fmt.Fprintln(out, yellow("------------------ Sleeping for 5 minutes before retry ------------------"))
+				if err := sleepContext(ctx, 5*time.Minute); err != nil {
+					return err
+				}
+			}
+		}
+
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, yellow("To inspect a failed cluster, retry with --no-cleanup:"))
+		fmt.Fprintf(out, "  func cluster create --no-cleanup\n")
+		fmt.Fprintln(out)
+		return fmt.Errorf("cluster allocation failed after %d attempt(s)", cfg.Retries)
+	}
+
+	if cfg.Retries > 1 {
+		return retry(func() error {
+			return allocateCluster(ctx, cfg, out)
+		})
+	}
+	return allocateCluster(ctx, cfg, out)

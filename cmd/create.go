@@ -280,7 +280,7 @@ func singleCommand(cmd *cobra.Command, args []string, cfg createConfig) string {
 		b.WriteString(" -r " + cfg.Repository)
 	}
 	if cmd.Flags().Lookup("verbose").Changed {
-		b.WriteString(fmt.Sprintf(" -v %v", cfg.Verbose))
+		fmt.Fprintf(&b, " -v %v", cfg.Verbose)
 	}
 	if len(args) > 0 {
 		b.WriteString(" " + cfg.Path) // optional trailing <path> argument
@@ -295,7 +295,6 @@ func singleCommand(cmd *cobra.Command, args []string, cfg createConfig) string {
 // pre-client validation should not be required, as the Client does its own
 // validation.
 func (c createConfig) Validate(client *fn.Client) (err error) {
-
 	// Confirm Name is valid
 	// Note that this is highly constricted, as it must currently adhere to the
 	// naming of a Knative Service, which itself is constrained to a Kubernetes
@@ -463,7 +462,8 @@ func (c createConfig) prompt(client *fn.Client) (createConfig, error) {
 				Options: runtimes,
 				Default: surveySelectDefault(c.Runtime, runtimes),
 			},
-		}}
+		},
+	}
 	if err := survey.Ask(qs, &c); err != nil {
 		return c, err
 	}
@@ -561,7 +561,7 @@ func runCreateHelp(cmd *cobra.Command, args []string, newClient ClientFactory) {
 	options, err := RuntimeTemplateOptions(client) // human-friendly
 	failSoft(err)
 
-	var data = struct {
+	data := struct {
 		Options string
 		Name    string
 	}{

@@ -1,0 +1,330 @@
+<Context>
+You receive a selection in neovim that you need to replace with new code.
+The selection's contents may contain notes, incorporate the notes every time if there are some.
+consider the context of the selection and what you are suppose to be implementing
+<SELECTION_LOCATION>
+range(point(37,1),point(70,3))
+</SELECTION_LOCATION>
+<SELECTION_CONTENT>
+	for attempt := 1; attempt <= cfg.Retries; attempt++ {
+		if cfg.Retries > 1 {
+			fmt.Fprintln(out, blue(fmt.Sprintf("------------------ Attempt %d ------------------", attempt)))
+		}
+
+		err := allocateCluster(ctx, cfg, out)
+		if err == nil {
+			if cfg.Retries > 1 {
+				fmt.Fprintln(out, green("------------------ Success! Cluster allocated ------------------"))
+			}
+			return nil
+		}
+
+		fmt.Fprintf(out, "%s\n", red(fmt.Sprintf("Allocation failed: %v", err)))
+
+		if cfg.NoCleanup {
+			// --no-cleanup: leave cluster in place for inspection
+			fmt.Fprintln(out, yellow("Cluster left in place for inspection (--no-cleanup). Clean up with: func cluster delete"))
+		} else {
+			// Default: clean up the failed cluster
+			fmt.Fprintln(out, red("------------------ Cleaning up failed attempt... ------------------"))
+			deleteErr := Delete(ctx, cfg, out)
+			if deleteErr != nil {
+				fmt.Fprintf(out, "Warning: cleanup failed: %v\n", deleteErr)
+			}
+		}
+
+		if attempt < cfg.Retries {
+			fmt.Fprintln(out, yellow("------------------ Sleeping for 5 minutes before retry ------------------"))
+			if err := sleepContext(ctx, 5*time.Minute); err != nil {
+				return err
+			}
+		}
+	}
+</SELECTION_CONTENT>
+<FILE_CONTAINING_SELECTION>
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+)
+
+// Create sets up a local KinD development cluster with the configured components.
+// This is the Go equivalent of hack/cluster.sh + hack/binaries.sh + hack/registry.sh.
+func Create(ctx context.Context, cfg ClusterConfig, out io.Writer) error {
+	// Phase 0: Ensure required binaries
+	if !cfg.SkipBinaries {
+		if err := ensureBinaries(ctx, cfg, out); err != nil {
+			return fmt.Errorf("binary setup: %w", err)
+		}
+	}
+
+	// Ensure kubeconfig directory exists
+	if err := os.MkdirAll(filepath.Dir(cfg.Kubeconfig), 0o755); err != nil {
+		return fmt.Errorf("creating kubeconfig directory: %w", err)
+	}
+
+	// Set KUBECONFIG for all child processes
+	os.Setenv("KUBECONFIG", cfg.Kubeconfig)
+
+	// Retry loop
+	if cfg.Retries > 1 {
+		fmt.Fprintln(out, blue(fmt.Sprintf("Cluster allocation will retry up to %d time(s)", cfg.Retries)))
+	}
+
+	for attempt := 1; attempt <= cfg.Retries; attempt++ {
+		if cfg.Retries > 1 {
+			fmt.Fprintln(out, blue(fmt.Sprintf("------------------ Attempt %d ------------------", attempt)))
+		}
+
+		err := allocateCluster(ctx, cfg, out)
+		if err == nil {
+			if cfg.Retries > 1 {
+				fmt.Fprintln(out, green("------------------ Success! Cluster allocated ------------------"))
+			}
+			return nil
+		}
+
+		fmt.Fprintf(out, "%s\n", red(fmt.Sprintf("Allocation failed: %v", err)))
+
+		if cfg.NoCleanup {
+			// --no-cleanup: leave cluster in place for inspection
+			fmt.Fprintln(out, yellow("Cluster left in place for inspection (--no-cleanup). Clean up with: func cluster delete"))
+		} else {
+			// Default: clean up the failed cluster
+			fmt.Fprintln(out, red("------------------ Cleaning up failed attempt... ------------------"))
+			deleteErr := Delete(ctx, cfg, out)
+			if deleteErr != nil {
+				fmt.Fprintf(out, "Warning: cleanup failed: %v\n", deleteErr)
+			}
+		}
+
+		if attempt < cfg.Retries {
+			fmt.Fprintln(out, yellow("------------------ Sleeping for 5 minutes before retry ------------------"))
+			if err := sleepContext(ctx, 5*time.Minute); err != nil {
+				return err
+			}
+		}
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, yellow("To inspect a failed cluster, retry with --no-cleanup:"))
+	fmt.Fprintf(out, "  func cluster create --no-cleanup\n")
+	fmt.Fprintln(out)
+	return fmt.Errorf("cluster allocation failed after %d attempt(s)", cfg.Retries)
+}
+
+func allocateCluster(ctx context.Context, cfg ClusterConfig, out io.Writer) error {
+	tools := NewToolchain(cfg)
+
+	// Phase 1: Sequential prerequisites — Kubernetes and load balancer must be
+	// up before any components can be installed.
+	if err := installKubernetes(ctx, cfg, tools, out); err != nil {
+		return err
+	}
+	if err := installLoadBalancer(ctx, cfg, tools, out); err != nil {
+		return err
+	}
+
+	// Phase 2: Parallel component installation
+	fmt.Fprintln(out, blue("Beginning Cluster Configuration"))
+	fmt.Fprintln(out, "Tasks will be executed in parallel.  Logs will be prefixed:")
+	if cfg.Serving {
+		fmt.Fprintln(out, "svr:  Serving, DNS and Networking")
+	}
+	if cfg.Eventing {
+		fmt.Fprintln(out, "evt:  Eventing and Namespace")
+	}
+	fmt.Fprintln(out, "reg:  Local Registry")
+	if cfg.Dapr {
+		fmt.Fprintln(out, "dpr:  Dapr Runtime")
+	}
+	if cfg.Tekton {
+		fmt.Fprintln(out, "tkt:  Tekton Pipelines")
+	}
+	if cfg.Keda {
+		fmt.Fprintln(out, "keda: Keda")
+	}
+	fmt.Fprintln(out)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	// svr: serving -> dns -> networking (sequential within goroutine)
+	if cfg.Serving {
+		g.Go(func() error {
+			w := NewPrefixWriter(out, "svr  ")
+			if err := installServing(gctx, cfg, tools, w); err != nil {
+				return fmt.Errorf("serving: %w", err)
+			}
+			if err := configureDNS(gctx, cfg, tools, w); err != nil {
+				return fmt.Errorf("dns: %w", err)
+			}
+			return installNetworking(gctx, cfg, tools, w)
+		})
+	}
+
+	// evt: eventing -> namespace
+	if cfg.Eventing {
+		g.Go(func() error {
+			w := NewPrefixWriter(out, "evt  ")
+			if err := installEventing(gctx, cfg, tools, w); err != nil {
+				return fmt.Errorf("eventing: %w", err)
+			}
+			return configureNamespace(gctx, cfg, tools, w)
+		})
+	}
+
+	// reg: registry (always)
+	g.Go(func() error {
+		w := NewPrefixWriter(out, "reg  ")
+		return installRegistry(gctx, cfg, tools, w)
+	})
+
+	// dpr: dapr
+	if cfg.Dapr {
+		g.Go(func() error {
+			w := NewPrefixWriter(out, "dpr  ")
+			return installDapr(gctx, cfg, tools, w)
+		})
+	}
+
+	// tkt: tekton -> pac
+	if cfg.Tekton {
+		g.Go(func() error {
+			w := NewPrefixWriter(out, "tkt  ")
+			if err := installTekton(gctx, cfg, tools, w); err != nil {
+				return fmt.Errorf("tekton: %w", err)
+			}
+			return installPAC(gctx, cfg, tools, w)
+		})
+	}
+
+	// keda: keda -> keda_http_addon
+	if cfg.Keda {
+		g.Go(func() error {
+			w := NewPrefixWriter(out, "keda ")
+			if err := installKeda(gctx, cfg, tools, w); err != nil {
+				return fmt.Errorf("keda: %w", err)
+			}
+			return installKedaHTTPAddon(gctx, cfg, tools, w)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Phase 3: Magic DNS (requires all services to be up)
+	if err := configureMagicDNS(ctx, cfg, tools, out); err != nil {
+		return err
+	}
+
+	// Phase 4: Host registry configuration
+	if !cfg.SkipRegistryConfig {
+		if err := ConfigureHostRegistry(cfg, out); err != nil {
+			// Non-fatal: warn but continue
+			fmt.Fprintf(out, "%s\n", yellow(fmt.Sprintf("Warning: registry configuration: %v", err)))
+		}
+	}
+
+	printNextSteps(cfg, out)
+
+	fmt.Fprintf(out, "\n%s\n\n", green("🎉 DONE"))
+	return nil
+}
+
+func printNextSteps(cfg ClusterConfig, out io.Writer) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, blue("Next Steps"))
+	fmt.Fprintln(out, blue("----------"))
+	fmt.Fprintln(out)
+
+	fmt.Fprintln(out, grey("REGISTRY"))
+	fmt.Fprintf(out, "%s\n", grey("If you haven't already, you may need to configure your container engine"))
+	fmt.Fprintf(out, "%s\n", grey("to trust the local insecure registry."))
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%s\n", grey("For Docker, edit the daemon config:"))
+	fmt.Fprintf(out, "  - Linux: /etc/docker/daemon.json\n")
+	fmt.Fprintf(out, "  - macOS: ~/.docker/daemon.json (or via Docker Desktop settings)\n")
+	fmt.Fprintf(out, "Add the following configuration:\n")
+	fmt.Fprintf(out, "{ \"insecure-registries\": [ \"localhost:%d\" ] }\n", cfg.RegistryPort)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%s\n", grey("For podman, edit /etc/containers/registries.conf to include:"))
+	fmt.Fprintf(out, "[[registry]]\nlocation = \"localhost:%d\"\ninsecure = true\n", cfg.RegistryPort)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%s\n", grey("The cluster and resources can be removed with:"))
+	fmt.Fprintln(out, "  func cluster delete")
+	fmt.Fprintln(out)
+
+	fmt.Fprintln(out, grey("KUBECONFIG"))
+	fmt.Fprintf(out, "%s\n", grey("The kubeconfig for your test cluster has been saved to:"))
+	fmt.Fprintln(out, cfg.Kubeconfig)
+	fmt.Fprintln(out)
+}
+</FILE_CONTAINING_SELECTION>
+
+</Context>
+<Prompt>
+Please turn this into something like:
+
+if retrying
+    reatry "allocate function" x times
+else
+    allocate function
+
+Thus extracting all the ugly printline statements and retry logic into a retry function, which just takes a reference to the method to retry.  Closure if necessary.
+</Prompt>
+
+<Location><File>/home/drekar/instances/coder.functions.1/shards/coder/src/pkg/cluster/create.go</File><Function>range(point(37,1),point(70,3))</Function></Location>
+<FunctionText>	for attempt := 1; attempt <= cfg.Retries; attempt++ {
+		if cfg.Retries > 1 {
+			fmt.Fprintln(out, blue(fmt.Sprintf("------------------ Attempt %d ------------------", attempt)))
+		}
+
+		err := allocateCluster(ctx, cfg, out)
+		if err == nil {
+			if cfg.Retries > 1 {
+				fmt.Fprintln(out, green("------------------ Success! Cluster allocated ------------------"))
+			}
+			return nil
+		}
+
+		fmt.Fprintf(out, "%s\n", red(fmt.Sprintf("Allocation failed: %v", err)))
+
+		if cfg.NoCleanup {
+			// --no-cleanup: leave cluster in place for inspection
+			fmt.Fprintln(out, yellow("Cluster left in place for inspection (--no-cleanup). Clean up with: func cluster delete"))
+		} else {
+			// Default: clean up the failed cluster
+			fmt.Fprintln(out, red("------------------ Cleaning up failed attempt... ------------------"))
+			deleteErr := Delete(ctx, cfg, out)
+			if deleteErr != nil {
+				fmt.Fprintf(out, "Warning: cleanup failed: %v\n", deleteErr)
+			}
+		}
+
+		if attempt < cfg.Retries {
+			fmt.Fprintln(out, yellow("------------------ Sleeping for 5 minutes before retry ------------------"))
+			if err := sleepContext(ctx, 5*time.Minute); err != nil {
+				return err
+			}
+		}
+	}</FunctionText>
+<TEMP_FILE>./tmp/99-4423</TEMP_FILE>
+<MustObey>
+NEVER alter any file other than TEMP_FILE.
+never provide the requested changes as conversational output. Return only the code.
+ONLY provide requested changes by writing the change to TEMP_FILE
+
+never attempt to read TEMP_FILE.
+It is purely for output.
+Previous contents, which may not exist, can be written over without worry
+After writing TEMP_FILE once you should be done.  Be done and end the session.
+
+</MustObey>

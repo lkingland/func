@@ -1,0 +1,25 @@
+	if hasCommand("docker") {
+		if runtime.GOOS == "darwin" {
+			fmt.Fprint(out, `If Docker Desktop was installed via Nix on macOS, you may need to manually configure the insecure registry.
+Please confirm "localhost:50000" is specified as an insecure registry in the docker config file.
+`)
+		} else {
+			fmt.Fprint(out, `If Docker was configured using nix, this command will fail to find daemon.json.
+Please configure the insecure registry by modifying your nix config:
+  virtualisation.docker = {
+    enable = true;
+    daemon.settings.insecure-registries = [ "localhost:50000" ];
+  };
+`)
+		}
+	}
+
+	if hasCommand("podman") {
+		fmt.Fprint(out, `If podman was configured via Nix, this command will likely fail.
+The configuration required is adding the following to registries.conf:
+  [[registry]]
+  location = "localhost:50000"
+  insecure = true
+`)
+	}
+}

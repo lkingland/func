@@ -1,0 +1,61 @@
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// ListClusters returns a list of KinD cluster names.
+func ListClusters(ctx context.Context, cfg ClusterConfig) ([]string, error) {
+	output, err := runOutput(ctx, cfg.kind(), "get", "clusters")
+	if err != nil {
+		return nil, fmt.Errorf("listing kind clusters: %w", err)
+	}
+	if output == "" {
+		return nil, nil
+	}
+
+	var clusters []string
+	for _, name := range strings.Split(output, "\n") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			clusters = append(clusters, name)
+		}
+	}
+	return clusters, nil
+}
+
+// ResolveDeletionTarget determines which cluster to delete based on the
+// provided name and the set of existing KinD clusters.
+// If name is explicitly set, it is used directly.
+// If name is the default "func" and exactly one cluster named "func" exists, use it.
+// If multiple func-prefixed clusters exist and no explicit name, return an error
+// listing them.
+func ResolveDeletionTarget(name string, nameExplicit bool, clusters []string) (string, error) {
+	if nameExplicit {
+		return name, nil
+	}
+
+	for _, c := range clusters {
+		if c == name {
+			return name, nil
+		}
+	}
+
+	var funcClusters []string
+	for _, c := range clusters {
+		if strings.HasPrefix(c, "func") {
+			funcClusters = append(funcClusters, c)
+		}
+	}
+
+	if len(funcClusters) == 0 {
+		return "", fmt.Errorf("no func clusters found. Available clusters: %s", strings.Join(clusters, ", "))
+	}
+	if len(funcClusters) == 1 {
+		return funcClusters[0], nil
+	}
+
+	return "", fmt.Errorf("multiple func clusters found, please specify a name: %s", strings.Join(funcClusters, ", "))
+}

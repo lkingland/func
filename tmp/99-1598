@@ -1,0 +1,19 @@
+func runClusterDelete(cmd *cobra.Command, args []string) error {
+	cfg := newClusterConfig()
+
+	clusters, err := cluster.ListClusters(cmd.Context(), cfg)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range clusters {
+		if c == cfg.Name {
+			return cluster.Delete(cmd.Context(), cfg, cmd.OutOrStderr())
+		}
+	}
+
+	if len(clusters) == 0 {
+		return fmt.Errorf("no clusters exist; use 'func cluster create' to create one")
+	}
+	return fmt.Errorf("cluster %q not found; existing clusters: %v\nUse 'func cluster create' to create one", cfg.Name, clusters)
+}

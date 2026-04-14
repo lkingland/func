@@ -1,0 +1,132 @@
+<Context>
+You receive a selection in neovim that you need to replace with new code.
+The selection's contents may contain notes, incorporate the notes every time if there are some.
+consider the context of the selection and what you are suppose to be implementing
+<SELECTION_LOCATION>
+range(point(34,1),point(36,70))
+</SELECTION_LOCATION>
+<SELECTION_CONTENT>
+	fmt.Fprintf(out, "%s  The following changes have not been undone:\n", red("NOTE:"))
+	fmt.Fprintf(out, " - Config setting registry localhost:%d (%s) as insecure\n", cfg.RegistryPort, registryName)
+	fmt.Fprintln(out, " - Downloaded container images were not removed")
+</SELECTION_CONTENT>
+<FILE_CONTAINING_SELECTION>
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+)
+
+// Delete removes a KinD cluster and its associated registry container.
+// This is the Go equivalent of hack/delete.sh.
+func Delete(ctx context.Context, cfg ClusterConfig, out io.Writer) error {
+	os.Setenv("KUBECONFIG", cfg.Kubeconfig)
+
+	fmt.Fprintln(out, blue("Deleting Cluster and Registry"))
+
+	err := run(ctx, out, cfg.kind(), "delete", "cluster",
+		"--name="+cfg.Name,
+		"--kubeconfig="+cfg.Kubeconfig)
+	if err != nil {
+		fmt.Fprintf(out, "Warning: failed to delete kind cluster %q: %v\n", cfg.Name, err)
+	}
+
+	// Stop and remove registry container
+	registryName := cfg.RegistryName()
+	if err := run(ctx, out, cfg.ContainerEngine, "stop", registryName); err != nil {
+		fmt.Fprintf(out, "Warning: failed to stop registry container %q: %v\n", registryName, err)
+	}
+	if err := run(ctx, out, cfg.ContainerEngine, "rm", registryName); err != nil {
+		fmt.Fprintf(out, "Warning: failed to remove registry container %q: %v\n", registryName, err)
+	}
+
+	fmt.Fprintf(out, "%s  The following changes have not been undone:\n", red("NOTE:"))
+	fmt.Fprintf(out, " - Config setting registry localhost:%d (%s) as insecure\n", cfg.RegistryPort, registryName)
+	fmt.Fprintln(out, " - Downloaded container images were not removed")
+	fmt.Fprintln(out, green("DONE"))
+
+	return nil
+}
+
+// ListClusters returns a list of KinD cluster names matching the "func" prefix.
+func ListClusters(ctx context.Context, cfg ClusterConfig) ([]string, error) {
+	output, err := runOutput(ctx, cfg.kind(), "get", "clusters")
+	if err != nil {
+		return nil, fmt.Errorf("listing kind clusters: %w", err)
+	}
+	if output == "" {
+		return nil, nil
+	}
+
+	var clusters []string
+	for _, name := range strings.Split(output, "\n") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			clusters = append(clusters, name)
+		}
+	}
+	return clusters, nil
+}
+
+// ResolveDeletionTarget determines which cluster to delete based on the
+// provided name and the set of existing KinD clusters.
+// If name is explicitly set, it is used directly.
+// If name is the default "func" and exactly one cluster named "func" exists, use it.
+// If multiple func-prefixed clusters exist and no explicit name, return an error
+// listing them.
+func ResolveDeletionTarget(name string, nameExplicit bool, clusters []string) (string, error) {
+	if nameExplicit {
+		return name, nil
+	}
+
+	// Check for an exact match on the default name
+	for _, c := range clusters {
+		if c == name {
+			return name, nil
+		}
+	}
+
+	// No exact match — see if there are any func-prefixed clusters
+	var funcClusters []string
+	for _, c := range clusters {
+		if strings.HasPrefix(c, "func") {
+			funcClusters = append(funcClusters, c)
+		}
+	}
+
+	if len(funcClusters) == 0 {
+		return "", fmt.Errorf("no func clusters found. Available clusters: %s", strings.Join(clusters, ", "))
+	}
+	if len(funcClusters) == 1 {
+		return funcClusters[0], nil
+	}
+
+	return "", fmt.Errorf("multiple func clusters found, please specify a name: %s", strings.Join(funcClusters, ", "))
+}
+</FILE_CONTAINING_SELECTION>
+
+</Context>
+<Prompt>
+Let's make this a single string please
+</Prompt>
+
+<Location><File>/home/drekar/instances/coder.functions.1/shards/coder/src/pkg/cluster/delete.go</File><Function>range(point(34,1),point(36,70))</Function></Location>
+<FunctionText>	fmt.Fprintf(out, "%s  The following changes have not been undone:\n", red("NOTE:"))
+	fmt.Fprintf(out, " - Config setting registry localhost:%d (%s) as insecure\n", cfg.RegistryPort, registryName)
+	fmt.Fprintln(out, " - Downloaded container images were not removed")</FunctionText>
+<TEMP_FILE>./tmp/99-1713</TEMP_FILE>
+<MustObey>
+NEVER alter any file other than TEMP_FILE.
+never provide the requested changes as conversational output. Return only the code.
+ONLY provide requested changes by writing the change to TEMP_FILE
+
+never attempt to read TEMP_FILE.
+It is purely for output.
+Previous contents, which may not exist, can be written over without worry
+After writing TEMP_FILE once you should be done.  Be done and end the session.
+
+</MustObey>

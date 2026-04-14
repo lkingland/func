@@ -1,0 +1,638 @@
+<Context>
+You receive a selection in neovim that you need to replace with new code.
+The selection's contents may contain notes, incorporate the notes every time if there are some.
+consider the context of the selection and what you are suppose to be implementing
+<SELECTION_LOCATION>
+range(point(469,1),point(498,2))
+</SELECTION_LOCATION>
+<SELECTION_CONTENT>
+// warnNix detects Nix and emits configuration guidance.
+func warnNix(out io.Writer) {
+	if !hasCommand("nix") && !hasCommand("nixos-rebuild") {
+		return
+	}
+
+	fmt.Fprintln(out, yellow("Warning: Nix detected"))
+
+	if hasCommand("docker") {
+		if runtime.GOOS == "darwin" {
+			fmt.Fprintln(out, "If Docker Desktop was installed via Nix on macOS, you may need to manually configure the insecure registry.")
+			fmt.Fprintf(out, "Please confirm %q is specified as an insecure registry in the docker config file.\n", registryAddr)
+		} else {
+			fmt.Fprintln(out, "If Docker was configured using nix, this command will fail to find daemon.json.")
+			fmt.Fprintln(out, "Please configure the insecure registry by modifying your nix config:")
+			fmt.Fprintln(out, "  virtualisation.docker = {")
+			fmt.Fprintln(out, "    enable = true;")
+			fmt.Fprintf(out, "    daemon.settings.insecure-registries = [ %q ];\n", registryAddr)
+			fmt.Fprintln(out, "  };")
+		}
+	}
+
+	if hasCommand("podman") {
+		fmt.Fprintln(out, "If podman was configured via Nix, this command will likely fail.")
+		fmt.Fprintln(out, "The configuration required is adding the following to registries.conf:")
+		fmt.Fprintln(out, `  [[registry]]`)
+		fmt.Fprintf(out, "  location = %q\n", registryAddr)
+		fmt.Fprintln(out, `  insecure = true`)
+	}
+}
+</SELECTION_CONTENT>
+<FILE_CONTAINING_SELECTION>
+package cluster
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+)
+
+const (
+	// registryContainerName is the fixed name of the shared local registry
+	// container. All func-managed dev clusters on the host share this
+	// single registry.
+	registryContainerName = "func-registry"
+	// registryHostPort is the TCP port the registry is published on to the
+	// host; it also appears in the host container engine's
+	// insecure-registries list.
+	registryHostPort = 50000
+	// registryContainerPort is the port the `registry:2` image listens on
+	// inside the container.
+	registryContainerPort = 5000
+	// registryAddr is the host-side address used in daemon.json /
+	// registries.conf and in the in-cluster `local-registry-hosting`
+	// ConfigMap.
+	registryAddr = "localhost:50000"
+)
+
+// ensureRegistry makes sure the shared func-registry container is running
+// and attached to the `kind` docker network. Safe to call whether or not
+// other func-managed clusters have already provisioned it.
+func ensureRegistry(ctx context.Context, cfg ClusterConfig, out io.Writer) error {
+	exists, running, onKindNet, err := inspectRegistry(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("inspecting registry: %w", err)
+	}
+	switch {
+	case !exists:
+		fmt.Fprintln(out, "Creating shared registry container", registryContainerName)
+		if err := createRegistry(ctx, cfg, out); err != nil {
+			return err
+		}
+		return attachRegistryToKindNetwork(ctx, cfg, out)
+	case !running:
+		fmt.Fprintf(out, "Shared registry container %s exists; starting\n", registryContainerName)
+		if err := run(ctx, out, "", cfg.ContainerEngine, "start", registryContainerName); err != nil {
+			return fmt.Errorf("starting registry: %w", err)
+		}
+		if !onKindNet {
+			return attachRegistryToKindNetwork(ctx, cfg, out)
+		}
+		return nil
+	default:
+		fmt.Fprintf(out, "Shared registry container %s already running\n", registryContainerName)
+		if !onKindNet {
+			return attachRegistryToKindNetwork(ctx, cfg, out)
+		}
+		return nil
+	}
+}
+
+// inspectRegistry reports whether the shared registry container exists,
+// whether it's running, and whether it's attached to the `kind` docker
+// network. A non-existent container returns (false, false, false, nil).
+func inspectRegistry(ctx context.Context, cfg ClusterConfig) (exists, running, onKindNet bool, err error) {
+	output, inspectErr := runOutput(ctx, cfg.ContainerEngine, "container", "inspect", registryContainerName)
+	if inspectErr != nil {
+		// Container-inspect returns non-zero when the target is absent.
+		// Treat any inspect error as "not present" — real engine
+		// problems resurface on the next docker command.
+		return false, false, false, nil
+	}
+	var results []struct {
+		State struct {
+			Running bool `json:"Running"`
+		} `json:"State"`
+		NetworkSettings struct {
+			Networks map[string]json.RawMessage `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
+	if err := json.Unmarshal([]byte(output), &results); err != nil {
+		return false, false, false, fmt.Errorf("parsing inspect output: %w", err)
+	}
+	if len(results) == 0 {
+		return false, false, false, nil
+	}
+	_, onKindNet = results[0].NetworkSettings.Networks["kind"]
+	return true, results[0].State.Running, onKindNet, nil
+}
+
+// createRegistry runs the registry container with engine-appropriate flags.
+// Podman joins the `kind` network at `run` time; Docker attaches it
+// separately via attachRegistryToKindNetwork.
+func createRegistry(ctx context.Context, cfg ClusterConfig, out io.Writer) error {
+	portMap := fmt.Sprintf("127.0.0.1:%d:%d", registryHostPort, registryContainerPort)
+	if cfg.ContainerEngine == "docker" {
+		return run(ctx, out, "", cfg.ContainerEngine,
+			"run", "-d", "--restart=always",
+			"-p", portMap,
+			"--name", registryContainerName,
+			"registry:2")
+	}
+	return run(ctx, out, "", cfg.ContainerEngine,
+		"run", "-d", "--restart=always",
+		"-p", portMap,
+		"--net=kind",
+		"--name", registryContainerName,
+		"registry:2")
+}
+
+// attachRegistryToKindNetwork connects the registry to the `kind` docker
+// network so in-cluster containerd mirrors can resolve it by name. Podman
+// set its network at `run` time, so this is a no-op there.
+func attachRegistryToKindNetwork(ctx context.Context, cfg ClusterConfig, out io.Writer) error {
+	if cfg.ContainerEngine != "docker" {
+		return nil
+	}
+	if err := run(ctx, out, "", cfg.ContainerEngine, "network", "connect", "kind", registryContainerName); err != nil {
+		return fmt.Errorf("connecting registry to kind network: %w", err)
+	}
+	return nil
+}
+
+// teardownRegistry stops and removes the shared registry container. Called
+// from Delete when the last func-managed cluster is being removed.
+func teardownRegistry(ctx context.Context, cfg ClusterConfig, out io.Writer) {
+	if err := run(ctx, out, "", cfg.ContainerEngine, "stop", registryContainerName); err != nil {
+		fmt.Fprintf(out, "Warning: failed to stop registry container %q: %v\n", registryContainerName, err)
+	}
+	if err := run(ctx, out, "", cfg.ContainerEngine, "rm", registryContainerName); err != nil {
+		fmt.Fprintf(out, "Warning: failed to remove registry container %q: %v\n", registryContainerName, err)
+	}
+}
+
+// configureHostRegistry configures the host's container engine(s) to trust
+// the shared local registry. Equivalent to hack/registry.sh.
+func configureHostRegistry(cfg ClusterConfig, out io.Writer) error {
+	start := time.Now()
+	fmt.Fprintln(out, blue("Enabling Insecure Local Registry"))
+
+	warnNix(out)
+
+	fmt.Fprintln(out, "Setting registry as trusted local-only")
+
+	if hasCommand("docker") {
+		fmt.Fprintln(out, "Configuring Docker for insecure registry...")
+		if err := configureDockerInsecure(cfg.NeedSudo, out); err != nil {
+			fmt.Fprintf(out, "%s\n", yellow(fmt.Sprintf("Warning: Failed to configure Docker: %v", err)))
+		}
+	}
+
+	if hasCommand("podman") {
+		fmt.Fprintln(out, "Configuring Podman for insecure registry...")
+		if err := configurePodmanInsecure(cfg.NeedSudo, out); err != nil {
+			fmt.Fprintf(out, "%s\n", yellow(fmt.Sprintf("Warning: Failed to configure Podman: %v", err)))
+		}
+	}
+
+	fmt.Fprintln(out, yellow(fmt.Sprintf(
+		"Note: %s is now a trusted insecure registry for this machine's container\n"+
+			"      engine. Any process with local access can push, pull, or delete\n"+
+			"      images there. Removed when the last func-managed cluster is\n"+
+			"      deleted.",
+		registryAddr)))
+
+	success(out, "Registry", time.Since(start))
+	return nil
+}
+
+// revertHostRegistry removes the insecure-registries entry we added at
+// create time and the matching podman stanza. Best-effort: per-engine
+// failures warn but don't abort the delete.
+func revertHostRegistry(cfg ClusterConfig, out io.Writer) {
+	if hasCommand("docker") {
+		if err := revertDockerInsecure(cfg.NeedSudo, out); err != nil {
+			fmt.Fprintf(out, "%s\n", yellow(fmt.Sprintf("Warning: failed to revert Docker insecure-registries: %v", err)))
+		}
+	}
+	if hasCommand("podman") {
+		if err := revertPodmanInsecure(cfg.NeedSudo, out); err != nil {
+			fmt.Fprintf(out, "%s\n", yellow(fmt.Sprintf("Warning: failed to revert Podman registries.conf: %v", err)))
+		}
+	}
+}
+
+// revertDockerInsecure removes registryAddr from daemon.json's
+// insecure-registries slice. No-op if the entry isn't there.
+func revertDockerInsecure(needSudo bool, out io.Writer) error {
+	path, useSudo := dockerDaemonPath(needSudo)
+	config, err := readDockerDaemon(path, useSudo)
+	if err != nil {
+		return err
+	}
+	if !removeInsecureRegistry(config, registryAddr) {
+		return nil
+	}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling daemon.json: %w", err)
+	}
+	if err := writeFileWithSudo(path, data, useSudo); err != nil {
+		return fmt.Errorf("writing daemon.json: %w", err)
+	}
+	fmt.Fprintf(out, "Removed %s from %s\n", registryAddr, path)
+	if runtime.GOOS == "darwin" {
+		fmt.Fprintln(out, yellow("*** If Docker Desktop is running, please restart it via the menu bar icon ***"))
+	}
+	return nil
+}
+
+// removeInsecureRegistry strips registry from config["insecure-registries"]
+// if present, and removes the key entirely when the slice becomes empty.
+// Returns true if anything changed.
+func removeInsecureRegistry(config map[string]any, registry string) bool {
+	existing, _ := config["insecure-registries"].([]any)
+	kept := existing[:0]
+	removed := false
+	for _, r := range existing {
+		if s, ok := r.(string); ok && s == registry {
+			removed = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if !removed {
+		return false
+	}
+	if len(kept) == 0 {
+		delete(config, "insecure-registries")
+	} else {
+		config["insecure-registries"] = kept
+	}
+	return true
+}
+
+// revertPodmanInsecure removes the v2 `[[registry]]` stanza we injected at
+// create time. The block has a fixed shape, so a literal string match is
+// reliable. v1 (`[registries.insecure]`) is not reverted — the format is
+// deprecated and entries are typically shared across sections.
+func revertPodmanInsecure(needSudo bool, out io.Writer) error {
+	path, useSudo, ok := podmanRegistriesConfPath(needSudo)
+	if !ok {
+		return nil
+	}
+	data, err := readFileWithSudo(path, useSudo)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || !fileExists(path) {
+			return nil
+		}
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	stanza := fmt.Sprintf("\n[[registry]]\nlocation = %q\ninsecure = true\n", registryAddr)
+	content := string(data)
+	if !strings.Contains(content, stanza) {
+		return nil
+	}
+	updated := strings.Replace(content, stanza, "", 1)
+	if err := writeFileWithSudo(path, []byte(updated), useSudo); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	fmt.Fprintf(out, "Removed %s from %s\n", registryAddr, path)
+	return nil
+}
+
+// podmanRegistriesConfPath returns the path + sudo flag for the
+// registries.conf that configureHostRegistry would have written to, or
+// (_, _, false) if no existing configuration is found.
+func podmanRegistriesConfPath(needSudo bool) (string, bool, bool) {
+	xdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfig == "" {
+		home, _ := os.UserHomeDir()
+		xdgConfig = filepath.Join(home, ".config")
+	}
+	userConfigFile := filepath.Join(xdgConfig, "containers", "registries.conf")
+	if fileExists(userConfigFile) {
+		return userConfigFile, false, true
+	}
+	systemConfigFile := "/etc/containers/registries.conf"
+	if fileExists(systemConfigFile) {
+		return systemConfigFile, needSudo, true
+	}
+	return "", false, false
+}
+
+// configureDockerInsecure adds the registry to Docker's insecure-registries
+// list, preserving any other daemon.json settings the user has configured.
+func configureDockerInsecure(needSudo bool, out io.Writer) error {
+	path, useSudo := dockerDaemonPath(needSudo)
+
+	config, err := readDockerDaemon(path, useSudo)
+	if err != nil {
+		return err
+	}
+	addInsecureRegistry(config, registryAddr)
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling daemon.json: %w", err)
+	}
+	if err := writeFileWithSudo(path, data, useSudo); err != nil {
+		return fmt.Errorf("writing daemon.json: %w", err)
+	}
+
+	fmt.Fprintf(out, "OK %s\n", path)
+	if runtime.GOOS == "darwin" {
+		fmt.Fprintln(out, yellow("*** If Docker Desktop is running, please restart it via the menu bar icon ***"))
+	} else {
+		fmt.Fprintln(out, "daemon.json updated; not restarting dockerd mid-setup (would tear down the in-progress cluster)")
+	}
+	return nil
+}
+
+// dockerDaemonPath returns the daemon.json path for the current OS and
+// whether writing requires sudo. Darwin uses the per-user path and never
+// needs sudo. Linux always writes to /etc/docker/daemon.json, which
+// requires root — so sudo is forced regardless of needSudo.
+func dockerDaemonPath(needSudo bool) (string, bool) {
+	if runtime.GOOS == "darwin" {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".docker", "daemon.json"), false
+	}
+	return "/etc/docker/daemon.json", needSudo || runtime.GOOS == "linux"
+}
+
+// readDockerDaemon loads daemon.json. A missing file returns an empty
+// config (first-time setup); read/parse failures return an error so we
+// don't silently overwrite a daemon.json the user has customized.
+func readDockerDaemon(path string, useSudo bool) (map[string]any, error) {
+	data, err := readFileWithSudo(path, useSudo)
+	if errors.Is(err, fs.ErrNotExist) || (err != nil && !fileExists(path)) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(data) == 0 {
+		return map[string]any{}, nil
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if config == nil {
+		config = map[string]any{}
+	}
+	return config, nil
+}
+
+// addInsecureRegistry appends registry to config["insecure-registries"] if
+// not already present, preserving any existing entries.
+func addInsecureRegistry(config map[string]any, registry string) {
+	existing, _ := config["insecure-registries"].([]any)
+	for _, r := range existing {
+		if s, ok := r.(string); ok && s == registry {
+			return
+		}
+	}
+	config["insecure-registries"] = append(existing, registry)
+}
+
+// configurePodmanInsecure adds the registry to Podman's registries.conf.
+func configurePodmanInsecure(needSudo bool, out io.Writer) error {
+	xdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfig == "" {
+		home, _ := os.UserHomeDir()
+		xdgConfig = filepath.Join(home, ".config")
+	}
+
+	userConfigDir := filepath.Join(xdgConfig, "containers")
+	userConfigFile := filepath.Join(userConfigDir, "registries.conf")
+	systemConfigFile := "/etc/containers/registries.conf"
+
+	var configFile string
+	var useSudo bool
+
+	if fileExists(userConfigFile) {
+		configFile = userConfigFile
+		useSudo = false
+		fmt.Fprintf(out, "Using existing user Podman registry config at %s\n", configFile)
+	} else if fileExists(systemConfigFile) {
+		configFile = systemConfigFile
+		useSudo = needSudo
+		fmt.Fprintf(out, "Using existing system Podman registry config at %s\n", configFile)
+	} else {
+		// Create user-level config
+		fmt.Fprintln(out, "No existing Podman registries.conf found.")
+		if err := os.MkdirAll(userConfigDir, 0o755); err != nil {
+			fmt.Fprintln(out, "Could not create user config directory. Skipping Podman registry configuration.")
+			return nil
+		}
+		configFile = userConfigFile
+		fmt.Fprintf(out, "Creating new user-level Podman registry config at %s\n", configFile)
+		content := fmt.Sprintf("# Podman registries configuration\n# Generated by func cluster create\n\n[[registry]]\nlocation = %q\ninsecure = true\n", registryAddr)
+		if err := os.WriteFile(configFile, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("writing config: %w", err)
+		}
+		fmt.Fprintf(out, "Successfully created Podman registry configuration for %s\n", registryAddr)
+		setupPodmanMacOSForwarding(out)
+		return nil
+	}
+
+	// Read existing config
+	data, err := readFileWithSudo(configFile, useSudo)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", configFile, err)
+	}
+	content := string(data)
+
+	// Check if already configured
+	if strings.Contains(content, registryAddr) {
+		fmt.Fprintf(out, "%s is already configured in %s\n", registryAddr, configFile)
+		return nil
+	}
+
+	// Detect v1 vs v2 format
+	isV2 := strings.Contains(content, "[[registry]]")
+
+	if isV2 {
+		fmt.Fprintln(out, "Adding insecure registry (v2 format)")
+		appendContent := fmt.Sprintf("\n[[registry]]\nlocation = %q\ninsecure = true\n", registryAddr)
+		if err := appendFileWithSudo(configFile, []byte(appendContent), useSudo); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(out, "Adding insecure registry (v1 format)")
+		if strings.Contains(content, "[registries.insecure]") {
+			// Section exists — insert after it
+			content = strings.Replace(content, "[registries.insecure]",
+				fmt.Sprintf("[registries.insecure]\nregistries = [%q]", registryAddr), 1)
+			if err := writeFileWithSudo(configFile, []byte(content), useSudo); err != nil {
+				return err
+			}
+		} else {
+			appendContent := fmt.Sprintf("\n[registries.insecure]\nregistries = [%q]\n", registryAddr)
+			if err := appendFileWithSudo(configFile, []byte(appendContent), useSudo); err != nil {
+				return err
+			}
+		}
+	}
+
+	setupPodmanMacOSForwarding(out)
+	return nil
+}
+
+// setupPodmanMacOSForwarding sets up SSH port forwarding on macOS so the
+// Podman VM can access the host's local registry.
+func setupPodmanMacOSForwarding(out io.Writer) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	port := fmt.Sprintf("%d", registryHostPort)
+	fmt.Fprintln(out, "Setting up port forwarding for Podman VM to access registry...")
+	cmd := exec.Command("podman", "machine", "ssh", "--",
+		"-L", port+":localhost:"+port, "-N", "-f")
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(out, "Warning: port forwarding setup failed: %v\n", err)
+	}
+}
+
+// warnNix detects Nix and emits configuration guidance.
+func warnNix(out io.Writer) {
+	if !hasCommand("nix") && !hasCommand("nixos-rebuild") {
+		return
+	}
+
+	fmt.Fprintln(out, yellow("Warning: Nix detected"))
+
+	if hasCommand("docker") {
+		if runtime.GOOS == "darwin" {
+			fmt.Fprintln(out, "If Docker Desktop was installed via Nix on macOS, you may need to manually configure the insecure registry.")
+			fmt.Fprintf(out, "Please confirm %q is specified as an insecure registry in the docker config file.\n", registryAddr)
+		} else {
+			fmt.Fprintln(out, "If Docker was configured using nix, this command will fail to find daemon.json.")
+			fmt.Fprintln(out, "Please configure the insecure registry by modifying your nix config:")
+			fmt.Fprintln(out, "  virtualisation.docker = {")
+			fmt.Fprintln(out, "    enable = true;")
+			fmt.Fprintf(out, "    daemon.settings.insecure-registries = [ %q ];\n", registryAddr)
+			fmt.Fprintln(out, "  };")
+		}
+	}
+
+	if hasCommand("podman") {
+		fmt.Fprintln(out, "If podman was configured via Nix, this command will likely fail.")
+		fmt.Fprintln(out, "The configuration required is adding the following to registries.conf:")
+		fmt.Fprintln(out, `  [[registry]]`)
+		fmt.Fprintf(out, "  location = %q\n", registryAddr)
+		fmt.Fprintln(out, `  insecure = true`)
+	}
+}
+
+// Helper functions
+
+func hasCommand(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func readFileWithSudo(path string, sudo bool) ([]byte, error) {
+	if !sudo {
+		return os.ReadFile(path)
+	}
+	out, err := exec.Command("sudo", "cat", path).Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func writeFileWithSudo(path string, data []byte, sudo bool) error {
+	if !sudo {
+		return os.WriteFile(path, data, 0o644)
+	}
+	cmd := exec.Command("sudo", "tee", path)
+	cmd.Stdin = strings.NewReader(string(data))
+	cmd.Stdout = io.Discard
+	return cmd.Run()
+}
+
+func appendFileWithSudo(path string, data []byte, sudo bool) error {
+	if !sudo {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = f.Write(data)
+		return err
+	}
+	cmd := exec.Command("sudo", "tee", "-a", path)
+	cmd.Stdin = strings.NewReader(string(data))
+	cmd.Stdout = io.Discard
+	return cmd.Run()
+}
+</FILE_CONTAINING_SELECTION>
+
+</Context>
+<Prompt>
+Let's make these multi-line string blocks
+
+</Prompt>
+
+<Location><File>/home/drekar/instances/coder.functions.1/shards/coder/src/pkg/cluster/registry.go</File><Function>range(point(469,1),point(498,2))</Function></Location>
+<FunctionText>// warnNix detects Nix and emits configuration guidance.
+func warnNix(out io.Writer) {
+	if !hasCommand("nix") && !hasCommand("nixos-rebuild") {
+		return
+	}
+
+	fmt.Fprintln(out, yellow("Warning: Nix detected"))
+
+	if hasCommand("docker") {
+		if runtime.GOOS == "darwin" {
+			fmt.Fprintln(out, "If Docker Desktop was installed via Nix on macOS, you may need to manually configure the insecure registry.")
+			fmt.Fprintf(out, "Please confirm %q is specified as an insecure registry in the docker config file.\n", registryAddr)
+		} else {
+			fmt.Fprintln(out, "If Docker was configured using nix, this command will fail to find daemon.json.")
+			fmt.Fprintln(out, "Please configure the insecure registry by modifying your nix config:")
+			fmt.Fprintln(out, "  virtualisation.docker = {")
+			fmt.Fprintln(out, "    enable = true;")
+			fmt.Fprintf(out, "    daemon.settings.insecure-registries = [ %q ];\n", registryAddr)
+			fmt.Fprintln(out, "  };")
+		}
+	}
+
+	if hasCommand("podman") {
+		fmt.Fprintln(out, "If podman was configured via Nix, this command will likely fail.")
+		fmt.Fprintln(out, "The configuration required is adding the following to registries.conf:")
+		fmt.Fprintln(out, `  [[registry]]`)
+		fmt.Fprintf(out, "  location = %q\n", registryAddr)
+		fmt.Fprintln(out, `  insecure = true`)
+	}
+}</FunctionText>
+<TEMP_FILE>./tmp/99-6268</TEMP_FILE>
+<MustObey>
+NEVER alter any file other than TEMP_FILE.
+never provide the requested changes as conversational output. Return only the code.
+ONLY provide requested changes by writing the change to TEMP_FILE
+
+never attempt to read TEMP_FILE.
+It is purely for output.
+Previous contents, which may not exist, can be written over without worry
+After writing TEMP_FILE once you should be done.  Be done and end the session.
+
+</MustObey>

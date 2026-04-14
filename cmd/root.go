@@ -108,6 +108,7 @@ Learn more about Knative at: https://knative.dev`, cfg.Name),
 					common.DefaultWorkDir,
 					newClient,
 				),
+				NewClusterCmd(),
 				NewLanguagesCmd(newClient),
 				NewTemplatesCmd(newClient),
 				NewRepositoryCmd(newClient),
@@ -131,6 +132,7 @@ Learn more about Knative at: https://knative.dev`, cfg.Name),
 
 	return cmd
 }
+
 
 // Helpers
 // ------------------------------------------

@@ -1,0 +1,20 @@
+// warnNix detects Nix and emits configuration guidance.
+func warnNix(out io.Writer) {
+	if !hasCommand("nix") && !hasCommand("nixos-rebuild") {
+		return
+	}
+
+	fmt.Fprintln(out, yellow("Warning: Nix detected"))
+
+	if hasCommand("docker") {
+		if runtime.GOOS == "darwin" {
+			fmt.Fprintf(out, "If Docker Desktop was installed via Nix on macOS, you may need to manually configure the insecure registry.\nPlease confirm %q is specified as an insecure registry in the docker config file.\n", registryAddr)
+		} else {
+			fmt.Fprintf(out, "If Docker was configured using nix, this command will fail to find daemon.json.\nPlease configure the insecure registry by modifying your nix config:\n  virtualisation.docker = {\n    enable = true;\n    daemon.settings.insecure-registries = [ %q ];\n  };\n", registryAddr)
+		}
+	}
+
+	if hasCommand("podman") {
+		fmt.Fprintf(out, "If podman was configured via Nix, this command will likely fail.\nThe configuration required is adding the following to registries.conf:\n  [[registry]]\n  location = %q\n  insecure = true\n", registryAddr)
+	}
+}

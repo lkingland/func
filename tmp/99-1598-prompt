@@ -1,0 +1,372 @@
+<Context>
+You receive a selection in neovim that you need to replace with new code.
+The selection's contents may contain notes, incorporate the notes every time if there are some.
+consider the context of the selection and what you are suppose to be implementing
+<SELECTION_LOCATION>
+range(point(181,1),point(215,2))
+</SELECTION_LOCATION>
+<SELECTION_CONTENT>
+func runClusterDelete(cmd *cobra.Command, args []string) error {
+	cfg := newClusterConfig()
+
+	// Pseudocode:
+	// If config.Name not set
+	//   set it to "func"
+	//
+	// confirm the named cluster exists, and if not
+	//   error with list or a nice message if none, instructing the user to use "create"
+	//
+
+	nameExplicit := len(args) > 0 // TODO there is no need for this, cfg already parses args.
+	if nameExplicit {
+		cfg.Name = args[0]
+		cfg.UpdateDerivedPaths()
+	}
+
+	// Resolve which cluster to delete
+	clusters, err := cluster.ListClusters(cmd.Context(), cfg)
+	if err != nil {
+		// If we can't list clusters, proceed with the given name
+		fmt.Fprintf(cmd.OutOrStderr(), "Warning: could not list clusters: %v\n", err)
+	} else {
+		target, err := cluster.ResolveDeletionTarget(cfg.Name, nameExplicit, clusters)
+		if err != nil {
+			return err
+		}
+		if target != cfg.Name {
+			cfg.Name = target
+			cfg.UpdateDerivedPaths()
+		}
+	}
+
+	return cluster.Delete(cmd.Context(), cfg, cmd.OutOrStderr())
+}
+</SELECTION_CONTENT>
+<FILE_CONTAINING_SELECTION>
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/ory/viper"
+	"github.com/spf13/cobra"
+
+	"knative.dev/func/pkg/cluster"
+	"knative.dev/func/pkg/config"
+)
+
+// NewClusterCmd creates the parent command for cluster management.
+func NewClusterCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "cluster",
+		Aliases: []string{"clusters"},
+		Short:   "Manage local clusters",
+		Long: `Manage local development clusters with Knative, Tekton, and
+other components pre-installed. For more documentation, see
+cluster create --help.
+
+Create a minimal cluster:
+  func cluster create --serving=false --eventing=false --tekton=false
+
+Remove the cluster and associated resources:
+  func cluster delete`,
+	}
+	cmd.AddCommand(NewClusterCreateCmd())
+	cmd.AddCommand(NewClusterDeleteCmd())
+	cmd.AddCommand(NewClusterListCmd())
+	return cmd
+}
+
+// NewClusterCreateCmd creates the 'func cluster create' command.
+func NewClusterCreateCmd() *cobra.Command {
+	cfg := cluster.NewClusterConfig()
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a local development cluster",
+		Long: `Create a local development cluster configured
+for Functions development. The cluster includes a local container
+registry, Knative Serving, Knative Eventing, and Tekton for in-cluster (remote) builds.
+
+Additional components can be enabled via flags.  Multiple clusters can be
+created by specifying --name (the default is "func").
+
+By deafult, the kubernetes config does not alter your current system's
+kubernetes configuration. Therefore, to use your development cluster, you
+will need to set the KUBECONFIG environment variable output after the cluster
+has been successfully created.  by default:
+
+set KUBECONFIG=~/.config/func/clusters/func.local/kubeconfig.yaml
+
+EXAMPLES
+
+  # Create a default development cluster
+  func cluster create
+
+  # List clusters
+  func clusters list
+
+  # Remove the default cluster
+  func cluster delete
+
+  # Create a minimal cluster (just Kubernetes + registry)
+  func cluster create --serving=false --eventing=false --tekton=false
+
+  # Create a cluster with a custom name and domain
+  func cluster create --name myproject --domain example.local
+  `,
+
+		PreRunE: bindEnv("name", "retries", "serving", "eventing", "tekton",
+			"keda", "dapr", "domain", "container-engine", "namespace",
+			"need-sudo", "registry-port", "pac-host", "skip-binaries",
+			"skip-registry-config", "no-cleanup", "verbose"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClusterCreate(cmd)
+		},
+	}
+
+	cmd.Flags().StringP("name", "n", cfg.Name,
+		"Cluster name ($FUNC_CLUSTER_NAME)")
+	cmd.Flags().Int("retries", cfg.Retries,
+		"Max cluster allocation attempts ($FUNC_CLUSTER_RETRIES)")
+	cmd.Flags().Bool("serving", cfg.Serving,
+		"Install Knative Serving ($FUNC_CLUSTER_SERVING)")
+	cmd.Flags().Bool("eventing", cfg.Eventing,
+		"Install Knative Eventing ($FUNC_CLUSTER_EVENTING)")
+	cmd.Flags().Bool("tekton", cfg.Tekton,
+		"Install Tekton + Pipelines-as-Code ($FUNC_CLUSTER_TEKTON)")
+	cmd.Flags().Bool("keda", cfg.Keda,
+		"Install KEDA + HTTP add-on ($FUNC_CLUSTER_KEDA)")
+	cmd.Flags().Bool("dapr", cfg.Dapr,
+		"Install Dapr runtime + Redis ($FUNC_CLUSTER_DAPR)")
+	cmd.Flags().String("domain", cfg.Domain,
+		"DNS domain for services ($FUNC_CLUSTER_DOMAIN)")
+	cmd.Flags().String("container-engine", cfg.ContainerEngine,
+		"Container engine: docker or podman ($FUNC_CONTAINER_ENGINE)")
+	cmd.Flags().String("namespace", cfg.Namespace,
+		"Kubernetes namespace for RBAC bindings ($FUNC_NAMESPACE)")
+	cmd.Flags().Bool("need-sudo", cfg.NeedSudo,
+		"Use sudo for registry configuration ($FUNC_NEED_SUDO)")
+	cmd.Flags().Int("registry-port", cfg.RegistryPort,
+		"Local registry host port ($FUNC_REGISTRY_PORT)")
+	cmd.Flags().String("pac-host", cfg.PacHost,
+		"PAC controller hostname ($FUNC_INT_PAC_HOST)")
+	cmd.Flags().Bool("skip-binaries", cfg.SkipBinaries,
+		"Skip binary downloads ($FUNC_SKIP_BINARIES)")
+	cmd.Flags().Bool("skip-registry-config", cfg.SkipRegistryConfig,
+		"Skip host registry configuration ($FUNC_SKIP_REGISTRY_CONFIG)")
+	cmd.Flags().Bool("no-cleanup", cfg.NoCleanup,
+		"Don't delete cluster on failure ($FUNC_NO_CLEANUP)")
+	addVerboseFlag(cmd, cfg.Verbose)
+
+	return cmd
+}
+
+func runClusterCreate(cmd *cobra.Command) error {
+	cfg := newClusterConfig()
+
+	return cluster.Create(cmd.Context(), cfg, cmd.OutOrStderr())
+}
+
+// NewClusterDeleteCmd creates the 'func cluster delete' command.
+func NewClusterDeleteCmd() *cobra.Command {
+	cfg := cluster.NewClusterConfig()
+
+	cmd := &cobra.Command{
+		Use:   "delete [name]",
+		Short: "Delete a local development cluster",
+		Long: `Delete a local KinD development cluster and its associated registry container.
+
+If only one cluster named "func" exists, it is deleted by default.
+If multiple func-prefixed clusters exist, specify which one by name.
+
+EXAMPLES
+
+  # Delete the default "func" cluster
+  func cluster delete
+
+  # Delete a named cluster
+  func cluster delete myproject`,
+
+		PreRunE: bindEnv("container-engine", "verbose"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClusterDelete(cmd, args)
+		},
+	}
+
+	cmd.Flags().String("container-engine", cfg.ContainerEngine,
+		"Container engine: docker or podman ($FUNC_CONTAINER_ENGINE)")
+	addVerboseFlag(cmd, cfg.Verbose)
+
+	return cmd
+}
+
+// NewClusterListCmd creates the 'func cluster list' command.
+func NewClusterListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List local development clusters",
+		Long:  `List local KinD development clusters.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := newClusterConfig()
+			clusters, err := cluster.ListClusters(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			for _, name := range clusters {
+				fmt.Fprintln(cmd.OutOrStdout(), name)
+			}
+			return nil
+		},
+	}
+}
+
+func runClusterDelete(cmd *cobra.Command, args []string) error {
+	cfg := newClusterConfig()
+
+	// Pseudocode:
+	// If config.Name not set
+	//   set it to "func"
+	//
+	// confirm the named cluster exists, and if not
+	//   error with list or a nice message if none, instructing the user to use "create"
+	//
+
+	nameExplicit := len(args) > 0 // TODO there is no need for this, cfg already parses args.
+	if nameExplicit {
+		cfg.Name = args[0]
+		cfg.UpdateDerivedPaths()
+	}
+
+	// Resolve which cluster to delete
+	clusters, err := cluster.ListClusters(cmd.Context(), cfg)
+	if err != nil {
+		// If we can't list clusters, proceed with the given name
+		fmt.Fprintf(cmd.OutOrStderr(), "Warning: could not list clusters: %v\n", err)
+	} else {
+		target, err := cluster.ResolveDeletionTarget(cfg.Name, nameExplicit, clusters)
+		if err != nil {
+			return err
+		}
+		if target != cfg.Name {
+			cfg.Name = target
+			cfg.UpdateDerivedPaths()
+		}
+	}
+
+	return cluster.Delete(cmd.Context(), cfg, cmd.OutOrStderr())
+}
+
+// newClusterConfig reads all cluster configuration from viper,
+// which merges flag values, environment variables, and defaults.
+func newClusterConfig() cluster.ClusterConfig {
+	name := viper.GetString("name")
+	if name == "" {
+		name = "func"
+	}
+
+	configDir := config.Dir()
+
+	cfg := cluster.ClusterConfig{
+		Name:               name,
+		Domain:             viper.GetString("domain"),
+		Serving:            viper.GetBool("serving"),
+		Eventing:           viper.GetBool("eventing"),
+		Tekton:             viper.GetBool("tekton"),
+		Keda:               viper.GetBool("keda"),
+		Dapr:               viper.GetBool("dapr"),
+		Retries:            viper.GetInt("retries"),
+		ContainerEngine:    viper.GetString("container-engine"),
+		Namespace:          viper.GetString("namespace"),
+		NeedSudo:           viper.GetBool("need-sudo"),
+		Verbose:            viper.GetBool("verbose"),
+		RegistryPort:       viper.GetInt("registry-port"),
+		PacHost:            viper.GetString("pac-host"),
+		SkipBinaries:       viper.GetBool("skip-binaries"),
+		SkipRegistryConfig: viper.GetBool("skip-registry-config"),
+		NoCleanup:          viper.GetBool("no-cleanup"),
+		GitHubActions:      os.Getenv("GITHUB_ACTIONS") == "true",
+		ConfigDir:          configDir,
+		BinDir:             filepath.Join(configDir, "bin"),
+		Kubeconfig:         filepath.Join(configDir, "clusters", name+".local", "kubeconfig.yaml"),
+	}
+
+	// Apply defaults for empty strings (viper returns "" for unset strings)
+	if cfg.Domain == "" {
+		cfg.Domain = "localtest.me"
+	}
+	if cfg.ContainerEngine == "" {
+		cfg.ContainerEngine = "docker"
+	}
+	if cfg.Namespace == "" {
+		cfg.Namespace = "default"
+	}
+	if cfg.PacHost == "" {
+		cfg.PacHost = fmt.Sprintf("pac-ctr.%s", cfg.Domain)
+	}
+	if cfg.RegistryPort == 0 {
+		cfg.RegistryPort = 50000
+	}
+	if cfg.Retries == 0 {
+		cfg.Retries = 1
+	}
+
+	return cfg
+}
+</FILE_CONTAINING_SELECTION>
+
+</Context>
+<Prompt>
+This function can be simplified to the given pseudocode
+</Prompt>
+
+<Location><File>/home/drekar/instances/coder.functions.1/shards/coder/src/cmd/cluster.go</File><Function>range(point(181,1),point(215,2))</Function></Location>
+<FunctionText>func runClusterDelete(cmd *cobra.Command, args []string) error {
+	cfg := newClusterConfig()
+
+	// Pseudocode:
+	// If config.Name not set
+	//   set it to "func"
+	//
+	// confirm the named cluster exists, and if not
+	//   error with list or a nice message if none, instructing the user to use "create"
+	//
+
+	nameExplicit := len(args) > 0 // TODO there is no need for this, cfg already parses args.
+	if nameExplicit {
+		cfg.Name = args[0]
+		cfg.UpdateDerivedPaths()
+	}
+
+	// Resolve which cluster to delete
+	clusters, err := cluster.ListClusters(cmd.Context(), cfg)
+	if err != nil {
+		// If we can't list clusters, proceed with the given name
+		fmt.Fprintf(cmd.OutOrStderr(), "Warning: could not list clusters: %v\n", err)
+	} else {
+		target, err := cluster.ResolveDeletionTarget(cfg.Name, nameExplicit, clusters)
+		if err != nil {
+			return err
+		}
+		if target != cfg.Name {
+			cfg.Name = target
+			cfg.UpdateDerivedPaths()
+		}
+	}
+
+	return cluster.Delete(cmd.Context(), cfg, cmd.OutOrStderr())
+}</FunctionText>
+<TEMP_FILE>./tmp/99-1598</TEMP_FILE>
+<MustObey>
+NEVER alter any file other than TEMP_FILE.
+never provide the requested changes as conversational output. Return only the code.
+ONLY provide requested changes by writing the change to TEMP_FILE
+
+never attempt to read TEMP_FILE.
+It is purely for output.
+Previous contents, which may not exist, can be written over without worry
+After writing TEMP_FILE once you should be done.  Be done and end the session.
+
+</MustObey>

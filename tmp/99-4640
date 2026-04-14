@@ -1,0 +1,8 @@
+	// Stop and remove registry container
+	registryName := cfg.RegistryName()
+	if err := run(ctx, out, cfg.ContainerEngine, "stop", registryName); err != nil {
+		fmt.Fprintf(out, "Warning: failed to stop registry container %q: %v\n", registryName, err)
+	}
+	if err := run(ctx, out, cfg.ContainerEngine, "rm", registryName); err != nil {
+		fmt.Fprintf(out, "Warning: failed to remove registry container %q: %v\n", registryName, err)
+	}
