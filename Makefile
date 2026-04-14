@@ -4,11 +4,13 @@
 #
 # ##
 
-# Use bash with pipefail so targets whose recipes pipe through tee/python
-# (e.g. test-full-logged) surface non-zero exits from the upstream command
-# instead of being masked by tee's success.
+# Use bash with errexit + pipefail so recipes halt on first failure and
+# surface non-zero exits from any stage of a pipeline (e.g. tee/python in
+# test-full-logged, or hack/list-files.sh upstream of a checker). Errexit
+# is suppressed inside && / || / loops, so existing `cmd && ... || true`
+# patterns in check-* targets continue to work as intended.
 SHELL       := bash
-.SHELLFLAGS := -o pipefail -c
+.SHELLFLAGS := -eo pipefail -c
 
 # Binaries
 BIN               := func
@@ -31,10 +33,10 @@ BIN_GOIMPORTS     ?= "$(PWD)/bin/goimports"
 # If the current commit does not have a semver tag, 'tip' is used, unless there
 # is a TAG environment variable. Precedence is git tag, environment variable, 'tip'
 HASH         := $(shell git rev-parse --short HEAD 2>/dev/null)
-VTAG         := $(shell git tag --points-at HEAD | head -1)
+VTAG         := $(shell git tag --points-at HEAD 2>/dev/null | head -1)
 VTAG         := $(shell [ -z $(VTAG) ] && echo $(ETAG) || echo $(VTAG))
-VERS         ?= $(shell git describe --tags --match 'v*')
-KVER         ?= $(shell git describe --tags --match 'knative-*')
+VERS         ?= $(shell git describe --tags --match 'v*' 2>/dev/null)
+KVER         ?= $(shell git describe --tags --match 'knative-*' 2>/dev/null)
 
 LDFLAGS      := -X knative.dev/func/pkg/version.Vers=$(VERS) -X knative.dev/func/pkg/version.Kver=$(KVER) -X knative.dev/func/pkg/version.Hash=$(HASH)
 
@@ -92,10 +94,7 @@ check-lint: $(BIN_GOLANGCI_LINT) ## Run golangci-lint
 .PHONY: check-goimports
 check-goimports: $(BIN_GOIMPORTS) ## Check Go import formatting
 	@echo "Checking Go import formatting..."
-	@git ls-files | \
-		git check-attr --stdin linguist-generated | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		git check-attr --stdin linguist-vendored | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		grep -Ev '(vendor/|third_party/|\.git)' | \
+	@./hack/list-files.sh | \
 		grep '\.go$$' | \
 		while IFS= read -r file; do [ -f "$$file" ] && echo "$$file"; done | \
 		xargs $(BIN_GOIMPORTS) -l | grep . && \
@@ -104,10 +103,7 @@ check-goimports: $(BIN_GOIMPORTS) ## Check Go import formatting
 .PHONY: check-misspell
 check-misspell: $(BIN_MISSPELL) ## Check for common misspellings
 	@echo "Checking for misspellings..."
-	@git ls-files | \
-		git check-attr --stdin linguist-generated | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		git check-attr --stdin linguist-vendored | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		grep -Ev '(vendor/|third_party/|\.git)' | \
+	@./hack/list-files.sh | \
 		grep -v '\.svg$$' | \
 		while IFS= read -r file; do [ -f "$$file" ] && echo "$$file"; done | \
 		xargs $(BIN_MISSPELL) -i importas -error
@@ -115,10 +111,7 @@ check-misspell: $(BIN_MISSPELL) ## Check for common misspellings
 .PHONY: check-whitespace
 check-whitespace: ## Check for trailing whitespace
 	@echo "Checking for trailing whitespace..."
-	@git ls-files | \
-		git check-attr --stdin linguist-generated | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		git check-attr --stdin linguist-vendored | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		grep -Ev '(vendor/|third_party/|\.git)' | \
+	@./hack/list-files.sh | \
 		grep -v '\.svg$$' | \
 		while IFS= read -r file; do [ -f "$$file" ] && echo "$$file"; done | \
 		xargs grep -nE " +$$" 2>&1 | grep -vi "binary file" && \
@@ -127,10 +120,7 @@ check-whitespace: ## Check for trailing whitespace
 .PHONY: check-eof
 check-eof: ## Check files end with newlines
 	@echo "Checking for missing EOF newlines..."
-	@git ls-files | \
-		git check-attr --stdin linguist-generated | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		git check-attr --stdin linguist-vendored | grep -Ev ': (set|true)$$' | cut -d: -f1 | \
-		grep -Ev '(vendor/|third_party/|\.git)' | \
+	@./hack/list-files.sh | \
 		grep -Ev '\.(ai|svg|tar|tgz|zip)$$' | \
 		while IFS= read -r file; do \
 			if [ -f "$$file" ] && [ -n "$$(tail -c 1 "$$file" 2>/dev/null)" ]; then \
