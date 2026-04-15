@@ -114,6 +114,11 @@ func (pp *PipelinesProvider) Run(ctx context.Context, f fn.Function) (string, fn
 		return "", f, err
 	}
 
+	// Warn if the func-generated legacy .s2i/bin/assemble exists; it will be
+	// uploaded to the PVC and can interfere with the in-cluster build.
+	// Remote deploy doesn't go through Client.Build, so we re-check here.
+	fn.WarnIfLegacyS2IScaffolding(f, os.Stderr)
+
 	// Namespace is either a new namespace, specified as f.Namespace, or
 	// the currently deployed namespace, recorded on f.Deploy.Namespace.
 	// If neither exist, an error is returned (namespace is required)
