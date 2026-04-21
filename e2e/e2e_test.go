@@ -314,7 +314,7 @@ func init() {
 	// Version
 	fmt.Fprintln(os.Stderr, "---------------------")
 	fmt.Fprintln(os.Stderr, "Func Version:")
-	printVersion() // TODO: `version` outputs a superfluous linebreak
+	printVersion()
 	fmt.Fprintln(os.Stderr, "--- init complete ---")
 }
 
