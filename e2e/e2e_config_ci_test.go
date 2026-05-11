@@ -60,6 +60,8 @@ func gitInit(t *testing.T, dir string) {
 		{"init", "-b", "main"},
 		{"config", "user.email", "test@test.com"},
 		{"config", "user.name", "test"},
+		{"config", "commit.gpgsign", "false"},
+		{"config", "tag.gpgsign", "false"},
 		{"add", "."},
 		{"commit", "-m", "init"},
 	}
