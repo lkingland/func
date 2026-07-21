@@ -6,7 +6,7 @@ This document details how to get started contributing to the project.  This incl
 Install git hooks that do basic pre-commit checks.
 
 **Tip**:
-Read through our (architecture)[ARCHITECTURE.md] file for how we structure this project (Or have AI do it!)
+Read through our [architecture](ARCHITECTURE.md) file for how we structure this project (Or have AI do it!)
 
 ```sh
 make setup-githooks
