@@ -99,14 +99,17 @@ DESCRIPTION
 	  export KUBECONFIG=~/.config/func/clusters/func.local/kubeconfig.yaml
 
 	Installed components are controlled by the --serving, --eventing,
-	--tekton, and --keda flags. Required binaries are downloaded into the
-	func config directory on first use unless --skip-binaries is set.
+	--tekton, and --keda flags. --serving and --eventing default to true
+	(hack/cluster.sh always installs Serving). Contour is always present for
+	the registry host Ingress: with Serving (default path) or standalone when
+	--serving=false. Required binaries are downloaded into the func config
+	directory on first use unless --skip-binaries is set.
 
 EXAMPLES
-	o Create a default development cluster
+	o Create a default development cluster (Serving + Eventing + registry)
 	  $ {{rootCmdUse}} cluster create
 
-	o Create a minimal cluster (just Kubernetes + registry)
+	o Create a minimal cluster (Kubernetes + Contour + registry; no Serving/Eventing)
 	  $ {{rootCmdUse}} cluster create --serving=false --eventing=false
 
 	o Create a cluster with a custom name and domain
