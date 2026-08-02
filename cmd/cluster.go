@@ -54,7 +54,7 @@ EXAMPLES
 	o Create a default development cluster
 	  $ {{rootCmdUse}} cluster create
 
-	o Create a minimal cluster (just Kubernetes + registry)
+	o Create a minimal cluster (Kubernetes + Contour + registry; no Serving/Eventing)
 	  $ {{rootCmdUse}} cluster create --serving=false --eventing=false
 
 	o List existing clusters
