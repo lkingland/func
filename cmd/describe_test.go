@@ -165,9 +165,8 @@ func TestDescribe_NameAndPathExclusivity(t *testing.T) {
 	}
 }
 
-//TestDescribe_WrapsNotInitialized ensures that describe command wraps
-//ErrNotInitialized with CLI-specific guidance via wrapDescribeError.
-
+// TestDescribe_WrapsNotInitialized ensures that describe command wraps
+// ErrNotInitialized with CLI-specific guidance via wrapDescribeError.
 func TestDescribe_WrapsNotInitialized(t *testing.T) {
 	_ = FromTempDirectory(t)
 	describer := mock.NewDescriber()
