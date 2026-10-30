@@ -381,7 +381,7 @@ func preserveDeploymentSelector(existing, desired *appsv1.Deployment, fnName str
 // preserveAutoscaledReplicas keeps the live replica count within the new scale bounds.
 // KEDA's HPA owns spec.replicas, so resetting it rescales the function.
 func preserveAutoscaledReplicas(existing, desired *appsv1.Deployment, f fn.Function) {
-	if existing == nil || existing.Spec.Replicas == nil {
+	if existing == nil || existing.Spec.Replicas == nil || desired == nil || desired.Spec.Replicas == nil {
 		return
 	}
 	replicas := max(*existing.Spec.Replicas, *desired.Spec.Replicas)

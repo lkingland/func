@@ -1905,3 +1905,14 @@ func Test_preserveAutoscaledReplicas(t *testing.T) {
 		})
 	}
 }
+
+func Test_preserveAutoscaledReplicas_NilDesired(t *testing.T) {
+	existing := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Replicas: new(int32(4))}}
+	preserveAutoscaledReplicas(existing, nil, fn.Function{})
+
+	desired := &appsv1.Deployment{}
+	preserveAutoscaledReplicas(existing, desired, fn.Function{})
+	if desired.Spec.Replicas != nil {
+		t.Fatalf("nil desired replicas were set to %d", *desired.Spec.Replicas)
+	}
+}
