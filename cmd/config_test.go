@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ory/viper"
@@ -49,7 +50,7 @@ func TestListEnvs(t *testing.T) {
 	}
 }
 
-func setupConfigEnvCmd(mock common.FunctionLoaderSaver, args ...string) *cobra.Command {
+func setupConfigCmd(mock common.FunctionLoaderSaver, sub string, args ...string) *cobra.Command {
 	cmd := fnCmd.NewConfigCmd(
 		mock,
 		github.NewBufferWriter(),
@@ -58,8 +59,12 @@ func setupConfigEnvCmd(mock common.FunctionLoaderSaver, args ...string) *cobra.C
 		fnCmd.NewTestCIGeneratorFactory(&github.WorkflowGeneratorMock{}),
 		fnCmd.NewClient,
 	)
-	cmd.SetArgs(append([]string{"envs"}, args...))
+	cmd.SetArgs(append([]string{sub}, args...))
 	return cmd
+}
+
+func setupConfigEnvCmd(mock common.FunctionLoaderSaver, args ...string) *cobra.Command {
+	return setupConfigCmd(mock, "envs", args...)
 }
 
 func TestListEnvAdd(t *testing.T) {
@@ -111,6 +116,195 @@ func TestListEnvAdd(t *testing.T) {
 	err = cmd.Execute()
 	if err == nil {
 		t.Error("expected variable name error but got nil")
+	}
+}
+
+// TestEnvsAddNameWithoutValue ensures that providing --name without --value returns an error
+// rather than silently writing a broken fn.Env{Name: &key, Value: nil} to func.yaml.
+func TestEnvsAddNameWithoutValue(t *testing.T) {
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	mock.SaveFn = func(f fn.Function) error {
+		t.Error("Save must not be called when validation fails")
+		return nil
+	}
+
+	cmd := setupConfigEnvCmd(mock, "add", "--name=API_KEY")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --name is provided without --value, got nil")
+	}
+	if !strings.Contains(err.Error(), "--value is required") {
+		t.Fatalf("expected the CLI missing-value message, got: %v", err)
+	}
+}
+
+// TestLabelsAddNameWithoutValue ensures that providing --name without --value returns an error.
+func TestLabelsAddNameWithoutValue(t *testing.T) {
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	mock.SaveFn = func(f fn.Function) error {
+		t.Error("Save must not be called when validation fails")
+		return nil
+	}
+
+	cmd := setupConfigCmd(mock, "labels", "add", "--name=env")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --name is provided without --value, got nil")
+	}
+}
+
+// TestLabelsAddValueWithoutName ensures that providing --value without --name returns an error.
+func TestLabelsAddValueWithoutName(t *testing.T) {
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	mock.SaveFn = func(f fn.Function) error {
+		t.Error("Save must not be called when validation fails")
+		return nil
+	}
+
+	cmd := setupConfigCmd(mock, "labels", "add", "--value=prod")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --value is provided without --name, got nil")
+	}
+}
+
+// TestEnvsAddBothFlagsSaves checks that --name and --value together persist.
+// The partial-flag tests only cover the error path.
+func TestEnvsAddBothFlagsSaves(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	saved := false
+	mock.SaveFn = func(f fn.Function) error {
+		saved = true
+		if len(f.Run.Envs) != 1 || f.Run.Envs[0].Name == nil || *f.Run.Envs[0].Name != "API_KEY" ||
+			f.Run.Envs[0].Value == nil || *f.Run.Envs[0].Value != "secret" {
+			t.Errorf("Save got envs %#v", f.Run.Envs)
+		}
+		return nil
+	}
+
+	cmd := setupConfigEnvCmd(mock, "add", "--name=API_KEY", "--value=secret")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !saved {
+		t.Fatal("Save was not called")
+	}
+}
+
+// TestEnvsAddPlainValueWithoutName ensures a bare value is not saved.
+// A nil name is valid only for a whole secret or configMap reference.
+func TestEnvsAddPlainValueWithoutName(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	mock.SaveFn = func(f fn.Function) error {
+		t.Error("Save must not be called for a plain value with no name")
+		return nil
+	}
+
+	cmd := setupConfigEnvCmd(mock, "add", "--value=plain")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when --value is a plain string without --name")
+	}
+}
+
+func TestEnvsAddWholeSecretWithoutNameSaves(t *testing.T) {
+	assertEnvValueWithoutNameSaves(t, "{{ secret:S }}")
+}
+
+func TestEnvsAddWholeConfigMapWithoutNameSaves(t *testing.T) {
+	assertEnvValueWithoutNameSaves(t, "{{ configMap:C }}")
+}
+
+func assertEnvValueWithoutNameSaves(t *testing.T, value string) {
+	t.Helper()
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	saved := false
+	mock.SaveFn = func(f fn.Function) error {
+		saved = true
+		if len(f.Run.Envs) != 1 || f.Run.Envs[0].Name != nil || f.Run.Envs[0].Value == nil || *f.Run.Envs[0].Value != value {
+			t.Errorf("Save got envs %#v", f.Run.Envs)
+		}
+		return nil
+	}
+
+	cmd := setupConfigEnvCmd(mock, "add", "--value="+value)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !saved {
+		t.Fatal("Save was not called")
+	}
+}
+
+// TestLabelsAddBothFlagsSaves checks that --name and --value together persist.
+// Those checks for a missing flag run only after the both-flags path returns.
+func TestLabelsAddBothFlagsSaves(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	saved := false
+	mock.SaveFn = func(f fn.Function) error {
+		saved = true
+		if len(f.Deploy.Labels) != 1 || f.Deploy.Labels[0].Key == nil || *f.Deploy.Labels[0].Key != "env" ||
+			f.Deploy.Labels[0].Value == nil || *f.Deploy.Labels[0].Value != "prod" {
+			t.Errorf("Save got labels %#v", f.Deploy.Labels)
+		}
+		return nil
+	}
+
+	cmd := setupConfigCmd(mock, "labels", "add", "--name=env", "--value=prod")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !saved {
+		t.Fatal("Save was not called")
 	}
 }
 
