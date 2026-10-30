@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ory/viper"
@@ -137,6 +138,9 @@ func TestEnvsAddNameWithoutValue(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when --name is provided without --value, got nil")
+	}
+	if !strings.Contains(err.Error(), "--value is required") {
+		t.Fatalf("expected the CLI missing-value message, got: %v", err)
 	}
 }
 

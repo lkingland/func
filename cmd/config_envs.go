@@ -121,8 +121,11 @@ set environment variable from a secret
 			}
 
 			if np != nil || vp != nil {
-				// Validate the new entry alone. A nil name is allowed only for a
-				// whole-secret or whole-configMap reference; a plain value needs a name.
+				// Keep the contributor's CLI wording for the common mistake.
+				// ValidateEnvs still rejects a plain value with no name, and an invalid name.
+				if np != nil && vp == nil {
+					return fmt.Errorf("--value is required when --name is provided")
+				}
 				entry := fn.Env{Name: np, Value: vp}
 				if msgs := fn.ValidateEnvs([]fn.Env{entry}); len(msgs) > 0 {
 					return errors.New(strings.Join(msgs, "\n"))
