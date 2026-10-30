@@ -213,6 +213,66 @@ func TestEnvsAddBothFlagsSaves(t *testing.T) {
 	}
 }
 
+// TestEnvsAddPlainValueWithoutName ensures a bare value is not saved.
+// A nil name is valid only for a whole secret or configMap reference.
+func TestEnvsAddPlainValueWithoutName(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	mock.SaveFn = func(f fn.Function) error {
+		t.Error("Save must not be called for a plain value with no name")
+		return nil
+	}
+
+	cmd := setupConfigEnvCmd(mock, "add", "--value=plain")
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when --value is a plain string without --name")
+	}
+}
+
+func TestEnvsAddWholeSecretWithoutNameSaves(t *testing.T) {
+	assertEnvValueWithoutNameSaves(t, "{{ secret:S }}")
+}
+
+func TestEnvsAddWholeConfigMapWithoutNameSaves(t *testing.T) {
+	assertEnvValueWithoutNameSaves(t, "{{ configMap:C }}")
+}
+
+func assertEnvValueWithoutNameSaves(t *testing.T, value string) {
+	t.Helper()
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	mock := common.NewMockLoaderSaver()
+	mock.LoadFn = func(path string) (fn.Function, error) {
+		return fn.Function{}, nil
+	}
+	saved := false
+	mock.SaveFn = func(f fn.Function) error {
+		saved = true
+		if len(f.Run.Envs) != 1 || f.Run.Envs[0].Name != nil || f.Run.Envs[0].Value == nil || *f.Run.Envs[0].Value != value {
+			t.Errorf("Save got envs %#v", f.Run.Envs)
+		}
+		return nil
+	}
+
+	cmd := setupConfigEnvCmd(mock, "add", "--value="+value)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !saved {
+		t.Fatal("Save was not called")
+	}
+}
+
 // TestLabelsAddBothFlagsSaves checks that --name and --value together persist.
 // Those checks for a missing flag run only after the both-flags path returns.
 func TestLabelsAddBothFlagsSaves(t *testing.T) {

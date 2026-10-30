@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
@@ -120,16 +121,14 @@ set environment variable from a secret
 			}
 
 			if np != nil || vp != nil {
-				if np != nil && vp == nil {
-					return fmt.Errorf("--value is required when --name is provided")
-				}
-				if np != nil {
-					if err := utils.ValidateEnvVarName(*np); err != nil {
-						return err
-					}
+				// Validate the new entry alone. A nil name is allowed only for a
+				// whole-secret or whole-configMap reference; a plain value needs a name.
+				entry := fn.Env{Name: np, Value: vp}
+				if msgs := fn.ValidateEnvs([]fn.Env{entry}); len(msgs) > 0 {
+					return errors.New(strings.Join(msgs, "\n"))
 				}
 
-				function.Run.Envs = append(function.Run.Envs, fn.Env{Name: np, Value: vp})
+				function.Run.Envs = append(function.Run.Envs, entry)
 				return loadSaver.Save(function)
 			}
 
